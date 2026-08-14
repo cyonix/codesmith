@@ -1,0 +1,28 @@
+{
+  "name": "codesmith",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A local TypeScript coding agent for software projects",
+  "type": "module",
+  "bin": {
+    "codesmith": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/agent-core.d.ts",
+      "default": "./dist/agent-core.js"
+    }
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc --project tsconfig.json",
+    "start": "npm run build && node dist/cli.js",
+    "test": "npm run build && node --test dist/test/*.test.js"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "typescript": "^5.9.0"
+  }
+}
