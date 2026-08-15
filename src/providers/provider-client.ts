@@ -8,7 +8,10 @@ export abstract class ProviderClient implements ProviderImplementation {
   protected readonly apiKey: string;
   protected readonly model: ModelCatalogEntry;
 
-  constructor(configuration: ProviderConfiguration, protected readonly fetcher: Fetcher) {
+  constructor(
+    configuration: ProviderConfiguration,
+    protected readonly fetcher: Fetcher,
+  ) {
     this.apiKey = configuration.apiKey;
     this.model = configuration.model;
   }
@@ -34,7 +37,10 @@ export abstract class ProviderClient implements ProviderImplementation {
     try {
       return await response.json();
     } catch {
-      throw new CodeSmithError("provider", "The provider returned an unreadable completion response.");
+      throw new CodeSmithError(
+        "provider",
+        "The provider returned an unreadable completion response.",
+      );
     }
   }
 }
@@ -87,10 +93,14 @@ async function boundedResponseText(response: Response): Promise<string> {
 
 function safeErrorText(value: string, apiKey: string): string {
   const escapedKey = apiKey.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return value
+  return [...value]
+    .map((character) => {
+      const codePoint = character.codePointAt(0)!;
+      return codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f) ? " " : character;
+    })
+    .join("")
     .replace(new RegExp(escapedKey, "g"), "[REDACTED]")
     .replace(/\bBearer\s+[^\s"'`,;:}\]]+/gi, "[REDACTED]")
     .replace(/\bsk-[^\s"'`,;:}\]]+/g, "[REDACTED]")
-    .replace(/[\u0000-\u001F\u007F-\u009F]/g, " ")
     .slice(0, 1_000);
 }

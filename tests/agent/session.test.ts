@@ -5,17 +5,22 @@ import path from "node:path";
 import test from "node:test";
 import { AgentSession } from "../../src/agent/session.js";
 import type { AgentEvent } from "../../src/agent/events.js";
-import type { AssistantResponse, ChatMessage, ChatProvider, ToolDefinition } from "../../src/shared/types.js";
+import type { AssistantResponse, ChatProvider } from "../../src/shared/types.js";
 
-test("session pauses for approval and emits UI-ready lifecycle events", async (context) => {
+void test("session pauses for approval and emits UI-ready lifecycle events", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
   context.after(async () => rm(root, { recursive: true, force: true }));
   const provider = new MockProvider([
     {
-      toolCalls: [{
-        id: "create-1",
-        function: { name: "create_file", arguments: "{\"path\":\"HelloWorld.swift\",\"content\":\"print(\\\"Hello, World!\\\")\\n\"}" },
-      }],
+      toolCalls: [
+        {
+          id: "create-1",
+          function: {
+            name: "create_file",
+            arguments: '{"path":"HelloWorld.swift","content":"print(\\"Hello, World!\\")\\n"}',
+          },
+        },
+      ],
     },
     { content: "Created HelloWorld.swift.", toolCalls: [] },
   ]);
@@ -23,47 +28,76 @@ test("session pauses for approval and emits UI-ready lifecycle events", async (c
   const events: AgentEvent[] = [];
   session.subscribe((event) => {
     events.push(event);
-    if (event.type === "approval_requested") assert.equal(session.approve(event.requestId, true), true);
+    if (event.type === "approval_requested")
+      assert.equal(session.approve(event.requestId, true), true);
   });
 
   const result = await session.submit("Create HelloWorld.swift.");
 
   assert.equal(result, "Created HelloWorld.swift.");
-  assert.equal(await readFile(path.join(root, "HelloWorld.swift"), "utf8"), "print(\"Hello, World!\")\n");
+  assert.equal(
+    await readFile(path.join(root, "HelloWorld.swift"), "utf8"),
+    'print("Hello, World!")\n',
+  );
   assert.deepEqual(
     events.map((event) => event.type),
-    ["status", "tool_proposed", "tool_started", "status", "approval_requested", "tool_finished", "status", "assistant_text", "status"],
+    [
+      "status",
+      "tool_proposed",
+      "tool_started",
+      "status",
+      "approval_requested",
+      "tool_finished",
+      "status",
+      "assistant_text",
+      "status",
+    ],
   );
   assert.equal(events.at(-1)?.type, "status");
   assert.deepEqual(events.at(-1), { type: "status", phase: "complete" });
 });
 
-test("session rejects unknown approval IDs", async (context) => {
+void test("session rejects unknown approval IDs", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
   context.after(async () => rm(root, { recursive: true, force: true }));
-  const session = await AgentSession.create({ projectRoot: root, provider: new MockProvider([]), autoApprove: true });
+  const session = await AgentSession.create({
+    projectRoot: root,
+    provider: new MockProvider([]),
+    autoApprove: true,
+  });
 
   assert.equal(session.approve("unknown", true), false);
 });
 
-test("closed sessions reject new prompts", async (context) => {
+void test("closed sessions reject new prompts", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
   context.after(async () => rm(root, { recursive: true, force: true }));
-  const session = await AgentSession.create({ projectRoot: root, provider: new MockProvider([]), autoApprove: true });
+  const session = await AgentSession.create({
+    projectRoot: root,
+    provider: new MockProvider([]),
+    autoApprove: true,
+  });
   session.close();
 
   await assert.rejects(() => session.submit("Create a file."), /session is closed/);
 });
 
-test("closing during approval denies the tool and stops the active run", async (context) => {
+void test("closing during approval denies the tool and stops the active run", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
   context.after(async () => rm(root, { recursive: true, force: true }));
-  const provider = new MockProvider([{
-    toolCalls: [{
-      id: "create-1",
-      function: { name: "create_file", arguments: "{\"path\":\"HelloWorld.swift\",\"content\":\"print(\\\"Hello, World!\\\")\\n\"}" },
-    }],
-  }]);
+  const provider = new MockProvider([
+    {
+      toolCalls: [
+        {
+          id: "create-1",
+          function: {
+            name: "create_file",
+            arguments: '{"path":"HelloWorld.swift","content":"print(\\"Hello, World!\\")\\n"}',
+          },
+        },
+      ],
+    },
+  ]);
   const session = await AgentSession.create({ projectRoot: root, provider });
   session.subscribe((event) => {
     if (event.type === "approval_requested") session.close();
@@ -73,15 +107,22 @@ test("closing during approval denies the tool and stops the active run", async (
   await assert.rejects(() => readFile(path.join(root, "HelloWorld.swift")));
 });
 
-test("closing from tool_started prevents an auto-approved edit", async (context) => {
+void test("closing from tool_started prevents an auto-approved edit", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
   context.after(async () => rm(root, { recursive: true, force: true }));
-  const provider = new MockProvider([{
-    toolCalls: [{
-      id: "create-1",
-      function: { name: "create_file", arguments: "{\"path\":\"HelloWorld.swift\",\"content\":\"print(\\\"Hello, World!\\\")\\n\"}" },
-    }],
-  }]);
+  const provider = new MockProvider([
+    {
+      toolCalls: [
+        {
+          id: "create-1",
+          function: {
+            name: "create_file",
+            arguments: '{"path":"HelloWorld.swift","content":"print(\\"Hello, World!\\")\\n"}',
+          },
+        },
+      ],
+    },
+  ]);
   const session = await AgentSession.create({ projectRoot: root, provider, autoApprove: true });
   session.subscribe((event) => {
     if (event.type === "tool_started") session.close();
@@ -96,10 +137,10 @@ class MockProvider implements ChatProvider {
 
   constructor(private readonly responses: AssistantResponse[]) {}
 
-  async complete(_messages: ChatMessage[], _tools: ToolDefinition[]): Promise<AssistantResponse> {
+  complete(): Promise<AssistantResponse> {
     const response = this.responses[this.index];
     this.index += 1;
     if (!response) throw new Error("Mock provider exhausted.");
-    return response;
+    return Promise.resolve(response);
   }
 }

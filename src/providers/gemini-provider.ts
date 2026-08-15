@@ -31,7 +31,9 @@ export class GeminiProvider extends ProviderClient {
       },
       body: JSON.stringify({
         model: this.model.model,
-        ...(this.previousInteractionId ? { previous_interaction_id: this.previousInteractionId } : {}),
+        ...(this.previousInteractionId
+          ? { previous_interaction_id: this.previousInteractionId }
+          : {}),
         ...(systemInstruction ? { system_instruction: systemInstruction } : {}),
         input: geminiInteractionInput(messages),
         tools: tools.map((tool) => ({
@@ -62,10 +64,15 @@ function geminiInteractionInput(messages: ChatMessage[]): unknown[] {
     for (const call of message.tool_calls ?? []) toolNames.set(call.id, call.function.name);
   }
   const lastAssistant = messages.map((message) => message.role).lastIndexOf("assistant");
-  const pendingMessages = messages.slice(lastAssistant + 1).filter((message) => message.role !== "system");
+  const pendingMessages = messages
+    .slice(lastAssistant + 1)
+    .filter((message) => message.role !== "system");
 
   if (!pendingMessages.length) {
-    throw new CodeSmithError("provider", "A Gemini interaction requires new user input or function results.");
+    throw new CodeSmithError(
+      "provider",
+      "A Gemini interaction requires new user input or function results.",
+    );
   }
 
   const input: unknown[] = [];
@@ -80,7 +87,10 @@ function geminiInteractionInput(messages: ChatMessage[]): unknown[] {
 
     const name = message.tool_call_id ? toolNames.get(message.tool_call_id) : undefined;
     if (!name || !message.tool_call_id) {
-      throw new CodeSmithError("provider", "A Gemini tool result did not match a preceding function call.");
+      throw new CodeSmithError(
+        "provider",
+        "A Gemini tool result did not match a preceding function call.",
+      );
     }
 
     input.push({
@@ -105,15 +115,16 @@ function geminiInteractionResponse(payload: unknown): { id: string; response: As
     if (!isRecord(step) || typeof step.type !== "string") continue;
     if (step.type === "model_output" && Array.isArray(step.content)) {
       for (const content of step.content) {
-        if (isRecord(content) && content.type === "text" && typeof content.text === "string") text.push(content.text);
+        if (isRecord(content) && content.type === "text" && typeof content.text === "string")
+          text.push(content.text);
       }
       continue;
     }
 
     if (
-      step.type === "function_call"
-      && typeof step.id === "string"
-      && typeof step.name === "string"
+      step.type === "function_call" &&
+      typeof step.id === "string" &&
+      typeof step.name === "string"
     ) {
       toolCalls.push({
         id: step.id,

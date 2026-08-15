@@ -45,15 +45,15 @@ flowchart LR
 
 ## Source layout
 
-| Directory | Responsibility |
-|---|---|
-| `src/agent/` | Session lifecycle, agent loop, and emitted events |
-| `src/providers/` | Model catalog and provider API adapters |
+| Directory        | Responsibility                                                |
+| ---------------- | ------------------------------------------------------------- |
+| `src/agent/`     | Session lifecycle, agent loop, and emitted events             |
+| `src/providers/` | Model catalog and provider API adapters                       |
 | `src/workspace/` | Sandboxing, project profiles, command policy, and local tools |
-| `src/cli/` | CLI entry point and interactive setup |
-| `src/shared/` | Cross-domain error and protocol types |
-| `src/core/` | Public, UI-neutral Agent Core facade |
-| `tests/` | Tests mirroring the production domain folders |
+| `src/cli/`       | CLI entry point and interactive setup                         |
+| `src/shared/`    | Cross-domain error and protocol types                         |
+| `src/core/`      | Public, UI-neutral Agent Core facade                          |
+| `tests/`         | Tests mirroring the production domain folders                 |
 
 `src/core/agent-core.ts` remains the package's public, UI-neutral entry point.
 
@@ -146,15 +146,15 @@ before selecting a Gemini model.
 
 `subscribe()` receives typed lifecycle events suitable for a GUI or TUI:
 
-| Event | Purpose |
-|---|---|
-| `status` | Agent is `thinking`, `waiting_for_approval`, or `complete` |
-| `assistant_text` | Final assistant response text |
-| `tool_proposed` | Model requested a tool call |
-| `tool_started` | A local tool is about to execute |
-| `tool_finished` | A tool completed with its structured JSON result |
-| `approval_requested` | Client must call `approve()` with the supplied request ID |
-| `error` | Session or provider failure |
+| Event                | Purpose                                                    |
+| -------------------- | ---------------------------------------------------------- |
+| `status`             | Agent is `thinking`, `waiting_for_approval`, or `complete` |
+| `assistant_text`     | Final assistant response text                              |
+| `tool_proposed`      | Model requested a tool call                                |
+| `tool_started`       | A local tool is about to execute                           |
+| `tool_finished`      | A tool completed with its structured JSON result           |
+| `approval_requested` | Client must call `approve()` with the supplied request ID  |
+| `error`              | Session or provider failure                                |
 
 The core does not own terminal input or UI rendering. The CLI uses `readline` to display approval requests; a GUI can render the same events as chat messages, timelines, diff previews, and approval dialogs.
 
@@ -174,14 +174,14 @@ All edits, Git operations, and commands require explicit approval unless `--yes`
 
 CodeSmith detects project markers in the selected root and exposes only the matching exact commands. In mixed-language repositories, the profile combines the commands for every detected marker. If no marker is recognized, file and Git tools remain available but `run_command` exposes no commands.
 
-| Profile | Detection | Exact commands |
-|---|---|---|
-| Swift Package | `Package.swift` | `swift build`, `swift test` |
-| Xcode | Root `.xcodeproj` | `xcodebuild build`, `xcodebuild test` |
+| Profile                 | Detection                                           | Exact commands                                                                         |
+| ----------------------- | --------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| Swift Package           | `Package.swift`                                     | `swift build`, `swift test`                                                            |
+| Xcode                   | Root `.xcodeproj`                                   | `xcodebuild build`, `xcodebuild test`                                                  |
 | JavaScript / TypeScript | `package.json`; TypeScript also has `tsconfig.json` | `npm test`, `npm run build`, and `npm run lint`, only when their package scripts exist |
-| Python | `pyproject.toml`, `requirements.txt`, or `setup.py` | `python -m pytest`, `python -m compileall .` |
-| Rust | `Cargo.toml` | `cargo build`, `cargo test`, `cargo clippy` |
-| Go | `go.mod` | `go build ./...`, `go test ./...` |
+| Python                  | `pyproject.toml`, `requirements.txt`, or `setup.py` | `python -m pytest`, `python -m compileall .`                                           |
+| Rust                    | `Cargo.toml`                                        | `cargo build`, `cargo test`, `cargo clippy`                                            |
+| Go                      | `go.mod`                                            | `go build ./...`, `go test ./...`                                                      |
 
 Commands never run through a shell, cannot accept model-supplied flags or arguments, and retain the same approval, output, timeout, cancellation, project-root, and non-secret-environment protections. New ecosystem support is added as an explicit profile rather than widening shell access.
 
@@ -201,6 +201,9 @@ Commands never run through a shell, cannot accept model-supplied flags or argume
 ```sh
 npm test
 npm run build
+npm run lint
 ```
 
 The test suite covers provider request formatting and redaction, session lifecycle and approval events, sandbox containment, symlink/hard-link/root-replacement protections, tool approvals, and the mocked agent loop.
+
+Use `npm run lint:fix` to apply ESLint fixes and `npm run format` to format the repository with Prettier. The pre-commit hook automatically applies both tools to supported staged files.

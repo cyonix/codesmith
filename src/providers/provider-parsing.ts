@@ -6,7 +6,7 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 
 export function parsedObject(value: string): Record<string, JsonValue> {
   const parsed = parsedJson(value);
-  return isRecord(parsed) ? parsed as Record<string, JsonValue> : {};
+  return isRecord(parsed) ? parsed : {};
 }
 
 function parsedJson(value: string): JsonValue {

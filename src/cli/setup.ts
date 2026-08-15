@@ -30,9 +30,14 @@ export async function selectModel(question: Question, write: Write): Promise<Mod
   }
 }
 
-export async function promptForApiKey(write: Write = (output) => stdout.write(output)): Promise<string> {
+export async function promptForApiKey(
+  write: Write = (output) => stdout.write(output),
+): Promise<string> {
   if (!stdin.isTTY || !stdout.isTTY || typeof stdin.setRawMode !== "function") {
-    throw new CodeSmithError("configuration", "An interactive TTY is required to enter an API key.");
+    throw new CodeSmithError(
+      "configuration",
+      "An interactive TTY is required to enter an API key.",
+    );
   }
 
   while (true) {

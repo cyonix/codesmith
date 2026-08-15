@@ -9,7 +9,10 @@ import { ModelProvider } from "../providers/provider.js";
 
 async function main(): Promise<void> {
   const options = parseOptions(process.argv.slice(2));
-  if (options.help) { stdout.write(`${help}\n`); return; }
+  if (options.help) {
+    stdout.write(`${help}\n`);
+    return;
+  }
 
   const selectionReadline = createInterface({ input: stdin, output: stdout });
   let readline: ReturnType<typeof createInterface> | undefined;
@@ -28,10 +31,16 @@ async function main(): Promise<void> {
     readline = commandReadline;
 
     const provider = new ModelProvider({ model, apiKey });
-    const activeSession = await AgentSession.create({ projectRoot: options.project, provider, autoApprove: options.yes });
+    const activeSession = await AgentSession.create({
+      projectRoot: options.project,
+      provider,
+      autoApprove: options.yes,
+    });
     session = activeSession;
 
-    activeSession.subscribe((event) => { void handleEvent(event, activeSession, commandReadline); });
+    activeSession.subscribe((event) => {
+      void handleEvent(event, activeSession, commandReadline);
+    });
     stdout.write(`CodeSmith is ready for ${options.project}. Type /exit to quit.\n`);
 
     while (true) {
@@ -49,25 +58,41 @@ async function main(): Promise<void> {
   }
 }
 
-async function handleEvent(event: AgentEvent, session: AgentSession, readline: ReturnType<typeof createInterface>): Promise<void> {
+async function handleEvent(
+  event: AgentEvent,
+  session: AgentSession,
+  readline: ReturnType<typeof createInterface>,
+): Promise<void> {
   if (event.type !== "approval_requested") return;
 
-  const answer = await readline.question(`\n${event.kind[0].toUpperCase()}${event.kind.slice(1)} approval required:\n${event.summary}\nAllow? [y/N] `);
+  const answer = await readline.question(
+    `\n${event.kind[0].toUpperCase()}${event.kind.slice(1)} approval required:\n${event.summary}\nAllow? [y/N] `,
+  );
   session.approve(event.requestId, answer.trim().toLowerCase() === "y");
 }
 
 function parseOptions(argumentsValue: string[]): { project: string; yes: boolean; help: boolean } {
-  let project: string | undefined; let yes = false;
+  let project: string | undefined;
+  let yes = false;
 
   for (let index = 0; index < argumentsValue.length; index += 1) {
     const argument = argumentsValue[index];
     if (argument === "--help" || argument === "-h") return { project: "", yes: false, help: true };
-    if (argument === "--yes") { yes = true; continue; }
-    if (argument === "--project") { project = argumentsValue[++index]; if (!project) throw new CodeSmithError("configuration", "--project requires a directory path."); continue; }
+    if (argument === "--yes") {
+      yes = true;
+      continue;
+    }
+    if (argument === "--project") {
+      project = argumentsValue[++index];
+      if (!project)
+        throw new CodeSmithError("configuration", "--project requires a directory path.");
+      continue;
+    }
     throw new CodeSmithError("configuration", `Unknown option: ${argument}`);
   }
 
-  if (!project) throw new CodeSmithError("configuration", "--project is required to select a project root.");
+  if (!project)
+    throw new CodeSmithError("configuration", "--project is required to select a project root.");
   return { project, yes, help: false };
 }
 
@@ -76,4 +101,7 @@ Usage: codesmith --project <directory> [--yes]
 Prompts for a model selection and API key at startup.
 All file paths are constrained to --project. Every edit, Git inspection, and detected project command requires confirmation unless --yes is supplied.
 Commands are detected from project manifests and are always executed without a shell.`;
-main().catch((error: unknown) => { stderr.write(`codesmith: ${error instanceof Error ? error.message : "Unexpected failure."}\n`); process.exitCode = 1; });
+main().catch((error: unknown) => {
+  stderr.write(`codesmith: ${error instanceof Error ? error.message : "Unexpected failure."}\n`);
+  process.exitCode = 1;
+});

@@ -34,7 +34,8 @@ export class OpenAIProvider extends ProviderClient {
 function normalizedOpenAIMessages(messages: ChatMessage[]): ChatMessage[] {
   return messages.map((message) => {
     if (message.role !== "assistant" || !message.tool_calls?.length) {
-      const { tool_calls: _toolCalls, ...withoutToolCalls } = message;
+      const withoutToolCalls = { ...message };
+      delete withoutToolCalls.tool_calls;
       return withoutToolCalls;
     }
 
@@ -46,19 +47,26 @@ function normalizedOpenAIMessages(messages: ChatMessage[]): ChatMessage[] {
 }
 
 function openAIResponse(payload: unknown): AssistantResponse {
-  if (!isRecord(payload) || !Array.isArray(payload.choices) || !isRecord(payload.choices[0]) || !isRecord(payload.choices[0].message)) {
+  if (
+    !isRecord(payload) ||
+    !Array.isArray(payload.choices) ||
+    !isRecord(payload.choices[0]) ||
+    !isRecord(payload.choices[0].message)
+  ) {
     throw new CodeSmithError("provider", "The provider returned no completion choices.");
   }
   const message = payload.choices[0].message;
   if (
-    (message.content !== undefined && message.content !== null && typeof message.content !== "string")
-    || (message.tool_calls !== undefined && !Array.isArray(message.tool_calls))
+    (message.content !== undefined &&
+      message.content !== null &&
+      typeof message.content !== "string") ||
+    (message.tool_calls !== undefined && !Array.isArray(message.tool_calls))
   ) {
     throw new CodeSmithError("provider", "The provider returned an invalid completion response.");
   }
 
   const response = {
-    content: message.content as string | null | undefined,
+    content: message.content,
     toolCalls: (message.tool_calls ?? []) as ToolCall[],
   };
   if (!response.content && !response.toolCalls.length) {

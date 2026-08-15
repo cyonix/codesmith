@@ -52,11 +52,13 @@ function anthropicMessages(messages: ChatMessage[]): unknown[] {
     if (message.role === "tool") {
       formatted.push({
         role: "user",
-        content: [{
-          type: "tool_result",
-          tool_use_id: message.tool_call_id,
-          content: message.content ?? "",
-        }],
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: message.tool_call_id,
+            content: message.content ?? "",
+          },
+        ],
       });
       continue;
     }
@@ -97,10 +99,10 @@ function anthropicResponse(payload: unknown): AssistantResponse {
     }
 
     if (
-      block.type === "tool_use"
-      && typeof block.id === "string"
-      && typeof block.name === "string"
-      && isRecord(block.input)
+      block.type === "tool_use" &&
+      typeof block.id === "string" &&
+      typeof block.name === "string" &&
+      isRecord(block.input)
     ) {
       toolCalls.push({
         id: block.id,
