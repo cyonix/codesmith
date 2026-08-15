@@ -18,4 +18,8 @@ export interface ToolDefinition {
 }
 
 export interface AssistantResponse { content?: string | null; toolCalls: ToolCall[]; }
-export interface ChatProvider { complete(messages: ChatMessage[], tools: ToolDefinition[]): Promise<AssistantResponse>; }
+
+export interface ChatProvider {
+  complete(messages: ChatMessage[], tools: ToolDefinition[]): Promise<AssistantResponse>;
+  acceptCompletion?(): void;
+}

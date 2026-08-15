@@ -1,6 +1,6 @@
 import { lstat, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
-import { CodeSmithError } from "./errors.js";
+import { CodeSmithError } from "../shared/errors.js";
 import { isContained } from "./sandbox.js";
 
 export type ProjectKind = "swift" | "xcode" | "javascript" | "typescript" | "python" | "rust" | "go";
@@ -19,6 +19,7 @@ export interface ProjectProfile {
 export async function detectProjectProfile(root: string): Promise<ProjectProfile> {
   const kinds = new Set<ProjectKind>();
   const commands: ProjectCommand[] = [];
+
   const addCommand = (command: string, executable: string, commandArguments: string[]): void => {
     if (!commands.some((candidate) => candidate.command === command)) {
       commands.push({ command, executable, arguments: commandArguments });
@@ -30,6 +31,7 @@ export async function detectProjectProfile(root: string): Promise<ProjectProfile
     addCommand("swift build", "swift", ["build"]);
     addCommand("swift test", "swift", ["test"]);
   }
+
   if ((await directoryEntries(root)).some((entry) => entry.name.endsWith(".xcodeproj") && entry.isDirectory())) {
     kinds.add("xcode");
     addCommand("xcodebuild build", "xcodebuild", ["build"]);
@@ -54,12 +56,14 @@ export async function detectProjectProfile(root: string): Promise<ProjectProfile
     addCommand("python -m pytest", "python", ["-m", "pytest"]);
     addCommand("python -m compileall .", "python", ["-m", "compileall", "."]);
   }
+
   if (await isFile(root, "Cargo.toml")) {
     kinds.add("rust");
     addCommand("cargo build", "cargo", ["build"]);
     addCommand("cargo test", "cargo", ["test"]);
     addCommand("cargo clippy", "cargo", ["clippy"]);
   }
+
   if (await isFile(root, "go.mod")) {
     kinds.add("go");
     addCommand("go build ./...", "go", ["build", "./..."]);
@@ -71,10 +75,12 @@ export async function detectProjectProfile(root: string): Promise<ProjectProfile
 
 export function validateCommand(command: string, profile: ProjectProfile): ProjectCommand {
   const allowed = profile.commands.find((candidate) => candidate.command === command);
+
   if (!allowed) {
     const expected = profile.commands.map((candidate) => candidate.command).join(", ") || "no commands";
     throw new CodeSmithError("command", `Command is not allowlisted for this project: ${command}. Allowed: ${expected}.`);
   }
+
   return { ...allowed, arguments: [...allowed.arguments] };
 }
 
@@ -97,6 +103,7 @@ async function hasAnyFile(root: string, filenames: string[]): Promise<boolean> {
   for (const filename of filenames) {
     if (await isFile(root, filename)) return true;
   }
+
   return false;
 }
 
@@ -112,6 +119,7 @@ async function packageScripts(root: string): Promise<Set<string> | undefined> {
   try {
     const manifestPath = path.join(root, "package.json");
     if (!(await lstat(manifestPath)).isFile() || !isContained(root, manifestPath)) return undefined;
+
     const parsed: unknown = JSON.parse(await readFile(manifestPath, "utf8"));
     if (!isRecord(parsed) || !isRecord(parsed.scripts)) return new Set();
     return new Set(Object.entries(parsed.scripts).flatMap(([name, value]) => typeof value === "string" ? [name] : []));

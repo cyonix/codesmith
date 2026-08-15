@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { AgentLoop } from "./agent-loop.js";
-import type { AgentEvent, AgentEventListener } from "./agent-events.js";
-import { CodeSmithError } from "./errors.js";
-import { ToolExecutor, type ApprovalRequest } from "./tools.js";
-import type { ChatProvider } from "./types.js";
+import { AgentLoop } from "./loop.js";
+import type { AgentEvent, AgentEventListener } from "./events.js";
+import { CodeSmithError } from "../shared/errors.js";
+import { ToolExecutor, type ApprovalRequest } from "../workspace/tools.js";
+import type { ChatProvider } from "../shared/types.js";
 
 export interface AgentSessionOptions {
   projectRoot: string;
@@ -29,12 +29,14 @@ export class AgentSession {
 
   static async create(options: AgentSessionOptions): Promise<AgentSession> {
     let session: AgentSession | undefined;
+
     const tools = await ToolExecutor.create(
       options.projectRoot,
       options.autoApprove,
       async (request) => session!.requestApproval(request),
       () => session!.closed,
     );
+
     session = new AgentSession(options.provider, tools, options.maximumToolRounds);
     return session;
   }
@@ -47,7 +49,9 @@ export class AgentSession {
   async submit(prompt: string): Promise<string> {
     if (this.closed) throw new CodeSmithError("loop", "This agent session is closed.");
     if (this.active) throw new CodeSmithError("loop", "This agent session is already processing a prompt.");
+
     this.active = true;
+
     try {
       return await this.loop.run(prompt);
     } catch (error) {
@@ -61,6 +65,7 @@ export class AgentSession {
   approve(requestId: string, approved: boolean): boolean {
     const pending = this.pendingApprovals.get(requestId);
     if (!pending) return false;
+
     this.pendingApprovals.delete(requestId);
     pending.resolve(approved);
     return true;
@@ -68,15 +73,20 @@ export class AgentSession {
 
   close(): void {
     if (this.closed) return;
+
     this.closed = true;
+
     for (const pending of this.pendingApprovals.values()) pending.resolve(false);
+
     this.pendingApprovals.clear();
     this.listeners.clear();
   }
 
   private requestApproval(request: ApprovalRequest): Promise<boolean> {
     if (this.closed) return Promise.resolve(false);
+
     const requestId = randomUUID();
+
     return new Promise((resolve) => {
       this.pendingApprovals.set(requestId, { resolve });
       this.emit({ type: "status", phase: "waiting_for_approval" });

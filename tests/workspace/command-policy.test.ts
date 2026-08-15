@@ -3,8 +3,8 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { detectProjectProfile, validateCommand } from "../command-policy.js";
-import { hardenedGitArguments, ToolExecutor } from "../tools.js";
+import { detectProjectProfile, validateCommand } from "../../src/workspace/command-policy.js";
+import { hardenedGitArguments, ToolExecutor } from "../../src/workspace/tools.js";
 
 async function project(files: Record<string, string>): Promise<string> {
   const root = await mkdtemp(path.join(os.tmpdir(), "codesmith-profile-"));

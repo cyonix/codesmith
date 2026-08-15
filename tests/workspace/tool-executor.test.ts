@@ -3,8 +3,8 @@ import { link, mkdtemp, mkdir, readFile, rename, rm, stat, symlink, writeFile } 
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { ToolExecutor } from "../tools.js";
-import type { ToolCall } from "../types.js";
+import { ToolExecutor } from "../../src/workspace/tools.js";
+import type { ToolCall } from "../../src/shared/types.js";
 
 test("does not patch a file when approval is denied", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-")); context.after(async () => rm(root, { recursive: true, force: true }));

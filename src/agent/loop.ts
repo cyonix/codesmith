@@ -1,7 +1,7 @@
-import { CodeSmithError } from "./errors.js";
-import type { AgentEvent } from "./agent-events.js";
-import { ToolExecutor } from "./tools.js";
-import type { ChatMessage, ChatProvider } from "./types.js";
+import { CodeSmithError } from "../shared/errors.js";
+import type { AgentEvent } from "./events.js";
+import { ToolExecutor } from "../workspace/tools.js";
+import type { ChatMessage, ChatProvider } from "../shared/types.js";
 
 export class AgentLoop {
   private static readonly maximumHistoryMessages = 32;
@@ -24,17 +24,22 @@ export class AgentLoop {
   async run(prompt: string): Promise<string> {
     this.trimHistory();
     this.messages.push({ role: "user", content: prompt });
+
     let toolCallsUsed = 0;
     let toolRounds = 0;
+
     while (true) {
       this.assertOpen();
       this.emit({ type: "status", phase: "thinking" });
       this.assertOpen();
+
       const response = await this.provider.complete(this.messages, this.tools.definitions);
       this.assertOpen();
+
       if (response.toolCalls.length > 0 && toolRounds >= this.maximumToolRounds) {
         throw new CodeSmithError("loop", "The agent exceeded the maximum number of tool-call rounds.");
       }
+
       toolCallsUsed += response.toolCalls.length;
       if (
         toolCallsUsed > AgentLoop.maximumToolCallsPerRun ||
@@ -42,12 +47,16 @@ export class AgentLoop {
       ) {
         throw new CodeSmithError("loop", "The agent exceeded the maximum number of tool calls for one request.");
       }
+
       this.messages.push({ role: "assistant", content: response.content, tool_calls: response.toolCalls });
+      this.provider.acceptCompletion?.();
+
       if (response.toolCalls.length === 0) {
         if (response.content) this.emit({ type: "assistant_text", text: response.content });
         this.emit({ type: "status", phase: "complete" });
         return response.content ?? "";
       }
+
       toolRounds += 1;
       for (const call of response.toolCalls) {
         this.assertOpen();
@@ -64,6 +73,7 @@ export class AgentLoop {
 
   private trimHistory(): void {
     const maximumPriorMessages = AgentLoop.maximumHistoryMessages - (AgentLoop.maximumToolCallsPerRun * 2) - 2;
+
     while (this.messages.length > maximumPriorMessages) {
       const nextUser = this.messages.findIndex((message, index) => index > 1 && message.role === "user");
       if (nextUser < 0) this.messages.splice(1);

@@ -5,21 +5,21 @@
   "description": "A local TypeScript coding agent for software projects",
   "type": "module",
   "bin": {
-    "codesmith": "./dist/cli.js"
+    "codesmith": "./dist/src/cli/main.js"
   },
   "exports": {
     ".": {
-      "types": "./dist/agent-core.d.ts",
-      "default": "./dist/agent-core.js"
+      "types": "./dist/src/core/agent-core.d.ts",
+      "default": "./dist/src/core/agent-core.js"
     }
   },
   "engines": {
     "node": ">=22"
   },
   "scripts": {
-    "build": "tsc --project tsconfig.json",
-    "start": "npm run build && node dist/cli.js",
-    "test": "npm run build && node --test dist/test/*.test.js"
+    "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc --project tsconfig.json",
+    "start": "npm run build && node dist/src/cli/main.js",
+    "test": "npm run build && cd dist && node --test"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",

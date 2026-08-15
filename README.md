@@ -1,6 +1,6 @@
 # CodeSmith
 
-CodeSmith is a local TypeScript/Node.js coding agent for Swift, JavaScript, TypeScript, Python, Rust, and Go projects. It uses an OpenAI-compatible Chat Completions provider while keeping workspace access, approvals, and command execution on the local machine.
+CodeSmith is a local TypeScript/Node.js coding agent for Swift, JavaScript, TypeScript, Python, Rust, and Go projects. It supports selected OpenAI, Anthropic, and Google Gemini models while keeping workspace access, approvals, and command execution on the local machine.
 
 The package exposes a UI-neutral Agent Core for CLI, desktop, or web clients. The bundled `codesmith` command is one client of that core.
 
@@ -18,7 +18,7 @@ flowchart LR
     Loop[AgentLoop]
     Events[Typed event stream]
     Tools[ToolExecutor and sandbox]
-    Provider[OpenAICompatibleProvider]
+    Provider[ModelProvider]
   end
 
   subgraph Workspace["Selected project root"]
@@ -27,7 +27,7 @@ flowchart LR
     Commands[Detected project-profile commands]
   end
 
-  Model[OpenAI-compatible\nChat Completions API]
+  Model[OpenAI Chat Completions\nAnthropic Messages\nGemini Interactions]
 
   CLI --> Session
   UI --> Session
@@ -43,24 +43,44 @@ flowchart LR
   Events --> UI
 ```
 
+## Source layout
+
+| Directory | Responsibility |
+|---|---|
+| `src/agent/` | Session lifecycle, agent loop, and emitted events |
+| `src/providers/` | Model catalog and provider API adapters |
+| `src/workspace/` | Sandboxing, project profiles, command policy, and local tools |
+| `src/cli/` | CLI entry point and interactive setup |
+| `src/shared/` | Cross-domain error and protocol types |
+| `src/core/` | Public, UI-neutral Agent Core facade |
+| `tests/` | Tests mirroring the production domain folders |
+
+`src/core/agent-core.ts` remains the package's public, UI-neutral entry point.
+
+### Provider API migration
+
+`ModelProvider` replaces the former `OpenAICompatibleProvider`. Construct it
+with an explicit `modelCatalog` entry and API key, as shown in the Agent Core
+API example below.
+
 ## Requirements
 
 - Node.js 22 or newer
-- An OpenAI-compatible Chat Completions provider
+- An API key for a supported OpenAI, Anthropic, or Google Gemini model
 
 ## CLI setup
 
 ```sh
 npm install
 
-export CODESMITH_API_KEY="..."
-export CODESMITH_BASE_URL="https://provider.example/v1/"
-export CODESMITH_MODEL="your-chat-model"
-
 npm start -- --project /absolute/path/to/project
 ```
 
-The base URL must include the provider's API version prefix when it uses one, such as `/v1/`. CodeSmith appends `chat/completions`.
+At startup, CodeSmith displays a grouped, numbered catalog of current
+tool-capable models from OpenAI, Anthropic, and Google Gemini. Choose a model
+number, then enter that provider's API key in a masked prompt. The key exists
+only for the current process and is never read from or written to environment
+variables, files, or a keychain.
 
 Use `--yes` only when you want to automatically approve every proposed edit, Git inspection, and allowlisted command:
 
@@ -85,9 +105,15 @@ Conversation context persists within a session. Brief replies such as `yes`, `no
 Import the public core entry point to use the agent from a desktop or web client:
 
 ```ts
-import { AgentSession, OpenAICompatibleProvider } from "codesmith";
+import { AgentSession, ModelProvider, modelCatalog } from "codesmith";
 
-const provider = new OpenAICompatibleProvider();
+const model = modelCatalog.find((entry) => entry.model === "gpt-5.4");
+if (!model) throw new Error("The requested model is not in the CodeSmith catalog.");
+
+const provider = new ModelProvider({
+  model,
+  apiKey: "supply this from your application's secure input flow",
+});
 const session = await AgentSession.create({
   projectRoot: "/absolute/path/to/project",
   provider,
@@ -108,6 +134,13 @@ session.close();
 ```
 
 `submit()` processes one prompt at a time. `approve(requestId, approved)` resolves a pending edit or command approval and returns `false` for an unknown or already-resolved ID. `close()` rejects future prompts, denies pending approvals, and stops subsequent tool execution.
+
+`modelCatalog` is the reviewed, built-in source of provider model IDs and
+endpoints. It uses the OpenAI Chat Completions, Anthropic Messages, and Google
+Gemini Interactions APIs, normalizing their tool calls for `AgentSession`.
+Gemini Interactions uses Google-managed server-side conversation state to
+continue a session's tool calls and responses; review Google's retention terms
+before selecting a Gemini model.
 
 ### Events
 

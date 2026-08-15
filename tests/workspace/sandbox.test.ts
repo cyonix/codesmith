@@ -3,7 +3,7 @@ import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { ProjectSandbox } from "../sandbox.js";
+import { ProjectSandbox } from "../../src/workspace/sandbox.js";
 
 test("sandbox resolves paths inside the selected root", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-")); context.after(async () => rm(root, { recursive: true, force: true }));

@@ -1,5 +1,5 @@
-import type { ApprovalKind } from "./tools.js";
-import type { ToolCall } from "./types.js";
+import type { ApprovalKind } from "../workspace/tools.js";
+import type { ToolCall } from "../shared/types.js";
 
 export type AgentEvent =
   | { type: "status"; phase: "thinking" | "waiting_for_approval" | "complete" }

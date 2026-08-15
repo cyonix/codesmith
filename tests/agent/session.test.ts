@@ -3,9 +3,9 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { AgentSession } from "../agent-session.js";
-import type { AgentEvent } from "../agent-events.js";
-import type { AssistantResponse, ChatMessage, ChatProvider, ToolDefinition } from "../types.js";
+import { AgentSession } from "../../src/agent/session.js";
+import type { AgentEvent } from "../../src/agent/events.js";
+import type { AssistantResponse, ChatMessage, ChatProvider, ToolDefinition } from "../../src/shared/types.js";
 
 test("session pauses for approval and emits UI-ready lifecycle events", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));

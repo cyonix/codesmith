@@ -3,9 +3,9 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { AgentLoop } from "../agent-loop.js";
-import { ToolExecutor } from "../tools.js";
-import type { AssistantResponse, ChatMessage, ChatProvider, ToolDefinition } from "../types.js";
+import { AgentLoop } from "../../src/agent/loop.js";
+import { ToolExecutor } from "../../src/workspace/tools.js";
+import type { AssistantResponse, ChatMessage, ChatProvider, ToolDefinition } from "../../src/shared/types.js";
 
 test("tool loop reads a file using a mocked provider", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-")); context.after(async () => rm(root, { recursive: true, force: true }));
@@ -67,8 +67,26 @@ test("tool loop reserves context for a full tool run after prior turns", async (
 
   assert.equal(result, "Completed all tool calls.");
 });
+test("does not accept a provider completion rejected by tool-call limits", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-")); context.after(async () => rm(root, { recursive: true, force: true }));
+  const toolCalls = Array.from({ length: 13 }, (_, index) => ({
+    id: `call-${index}`,
+    function: { name: "list_files", arguments: "{}" },
+  }));
+  const provider = new MockProvider([{ toolCalls }]);
+  const loop = new AgentLoop(provider, await ToolExecutor.create(root, true));
+
+  await assert.rejects(
+    () => loop.run("Inspect the project."),
+    /exceeded the maximum number of tool calls/,
+  );
+
+  assert.equal(provider.acceptedCompletions, 0);
+});
 class MockProvider implements ChatProvider {
   readonly messages: ChatMessage[][] = []; private index = 0;
+  acceptedCompletions = 0;
   constructor(private readonly responses: AssistantResponse[]) {}
   async complete(messages: ChatMessage[], _tools: ToolDefinition[]): Promise<AssistantResponse> { this.messages.push([...messages]); const response = this.responses[this.index++]; if (!response) throw new Error("Mock provider exhausted."); return response; }
+  acceptCompletion(): void { this.acceptedCompletions += 1; }
 }
