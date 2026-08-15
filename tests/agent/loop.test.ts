@@ -5,21 +5,48 @@ import path from "node:path";
 import test from "node:test";
 import { AgentLoop } from "../../src/agent/loop.js";
 import { ToolExecutor } from "../../src/workspace/tools.js";
-import type { AssistantResponse, ChatMessage, ChatProvider, ToolDefinition } from "../../src/shared/types.js";
+import type { AssistantResponse, ChatMessage, ChatProvider } from "../../src/shared/types.js";
 
-test("tool loop reads a file using a mocked provider", async (context) => {
-  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-")); context.after(async () => rm(root, { recursive: true, force: true }));
+void test("tool loop reads a file using a mocked provider", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
   await writeFile(path.join(root, "README.md"), "Hello from TypeScript");
-  const provider = new MockProvider([{ toolCalls: [{ id: "read-1", function: { name: "read_file", arguments: "{\"path\":\"README.md\"}" } }] }, { content: "The README contains a TypeScript greeting.", toolCalls: [] }]);
-  const result = await new AgentLoop(provider, await ToolExecutor.create(root, true)).run("What is in the README?");
+  const provider = new MockProvider([
+    {
+      toolCalls: [
+        { id: "read-1", function: { name: "read_file", arguments: '{"path":"README.md"}' } },
+      ],
+    },
+    { content: "The README contains a TypeScript greeting.", toolCalls: [] },
+  ]);
+  const result = await new AgentLoop(provider, await ToolExecutor.create(root, true)).run(
+    "What is in the README?",
+  );
   assert.equal(result, "The README contains a TypeScript greeting.");
-  assert.ok(provider.messages.flat().some((message) => message.role === "tool" && message.content?.includes("Hello from TypeScript")));
+  assert.ok(
+    provider.messages
+      .flat()
+      .some(
+        (message) => message.role === "tool" && message.content?.includes("Hello from TypeScript"),
+      ),
+  );
 });
-test("tool loop retains prior prompts and creates the first project file", async (context) => {
-  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-")); context.after(async () => rm(root, { recursive: true, force: true }));
+void test("tool loop retains prior prompts and creates the first project file", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
   const provider = new MockProvider([
     { content: "What should I name the file?", toolCalls: [] },
-    { toolCalls: [{ id: "create-1", function: { name: "create_file", arguments: "{\"path\":\"HelloWorld.swift\",\"content\":\"print(\\\"Hello, World!\\\")\\n\"}" } }] },
+    {
+      toolCalls: [
+        {
+          id: "create-1",
+          function: {
+            name: "create_file",
+            arguments: '{"path":"HelloWorld.swift","content":"print(\\"Hello, World!\\")\\n"}',
+          },
+        },
+      ],
+    },
     { content: "Created HelloWorld.swift.", toolCalls: [] },
   ]);
   const loop = new AgentLoop(provider, await ToolExecutor.create(root, true));
@@ -28,16 +55,34 @@ test("tool loop retains prior prompts and creates the first project file", async
   const result = await loop.run("Name it HelloWorld.swift and proceed.");
 
   assert.equal(result, "Created HelloWorld.swift.");
-  assert.equal(await (await import("node:fs/promises")).readFile(path.join(root, "HelloWorld.swift"), "utf8"), "print(\"Hello, World!\")\n");
-  assert.ok(provider.messages[1].some((message) => message.role === "user" && message.content?.includes("standalone hello world")));
+  assert.equal(
+    await (await import("node:fs/promises")).readFile(path.join(root, "HelloWorld.swift"), "utf8"),
+    'print("Hello, World!")\n',
+  );
+  assert.ok(
+    provider.messages[1].some(
+      (message) => message.role === "user" && message.content?.includes("standalone hello world"),
+    ),
+  );
 });
-test("tool loop interprets yes as confirmation of the preceding file-removal question", async (context) => {
-  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-")); context.after(async () => rm(root, { recursive: true, force: true }));
-  await writeFile(path.join(root, "HelloWorld.swift"), "print(\"Hello, World!\")\n");
+void test("tool loop interprets yes as confirmation of the preceding file-removal question", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  await writeFile(path.join(root, "HelloWorld.swift"), 'print("Hello, World!")\n');
   await writeFile(path.join(root, "PrintPrimes.swift"), "print([2, 3, 5])\n");
   const provider = new MockProvider([
-    { content: "I created PrintPrimes.swift. Would you like me to remove HelloWorld.swift?", toolCalls: [] },
-    { toolCalls: [{ id: "delete-1", function: { name: "delete_file", arguments: "{\"path\":\"HelloWorld.swift\"}" } }] },
+    {
+      content: "I created PrintPrimes.swift. Would you like me to remove HelloWorld.swift?",
+      toolCalls: [],
+    },
+    {
+      toolCalls: [
+        {
+          id: "delete-1",
+          function: { name: "delete_file", arguments: '{"path":"HelloWorld.swift"}' },
+        },
+      ],
+    },
     { content: "Removed HelloWorld.swift.", toolCalls: [] },
   ]);
   const loop = new AgentLoop(provider, await ToolExecutor.create(root, true));
@@ -48,15 +93,33 @@ test("tool loop interprets yes as confirmation of the preceding file-removal que
   assert.equal(result, "Removed HelloWorld.swift.");
   await assert.rejects(() => readFile(path.join(root, "HelloWorld.swift")));
   assert.equal(await readFile(path.join(root, "PrintPrimes.swift"), "utf8"), "print([2, 3, 5])\n");
-  assert.ok(provider.messages[1].some((message) => message.role === "system" && message.content?.includes("brief reply such as 'yes'")));
-  assert.ok(provider.messages[1].some((message) => message.role === "assistant" && message.content?.includes("remove HelloWorld.swift")));
-  assert.ok(provider.messages[1].some((message) => message.role === "user" && message.content === "yes"));
+  assert.ok(
+    provider.messages[1].some(
+      (message) =>
+        message.role === "system" && message.content?.includes("brief reply such as 'yes'"),
+    ),
+  );
+  assert.ok(
+    provider.messages[1].some(
+      (message) =>
+        message.role === "assistant" && message.content?.includes("remove HelloWorld.swift"),
+    ),
+  );
+  assert.ok(
+    provider.messages[1].some((message) => message.role === "user" && message.content === "yes"),
+  );
 });
-test("tool loop reserves context for a full tool run after prior turns", async (context) => {
-  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-")); context.after(async () => rm(root, { recursive: true, force: true }));
-  const toolResponse: AssistantResponse = { toolCalls: [{ id: "list", function: { name: "list_files", arguments: "{}" } }] };
+void test("tool loop reserves context for a full tool run after prior turns", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const toolResponse: AssistantResponse = {
+    toolCalls: [{ id: "list", function: { name: "list_files", arguments: "{}" } }],
+  };
   const provider = new MockProvider([
-    ...Array.from({ length: 8 }, (_, index) => ({ content: `Prior response ${index}.`, toolCalls: [] })),
+    ...Array.from({ length: 8 }, (_, index) => ({
+      content: `Prior response ${index}.`,
+      toolCalls: [],
+    })),
     ...Array.from({ length: 12 }, () => toolResponse),
     { content: "Completed all tool calls.", toolCalls: [] },
   ]);
@@ -67,8 +130,9 @@ test("tool loop reserves context for a full tool run after prior turns", async (
 
   assert.equal(result, "Completed all tool calls.");
 });
-test("does not accept a provider completion rejected by tool-call limits", async (context) => {
-  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-")); context.after(async () => rm(root, { recursive: true, force: true }));
+void test("does not accept a provider completion rejected by tool-call limits", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
   const toolCalls = Array.from({ length: 13 }, (_, index) => ({
     id: `call-${index}`,
     function: { name: "list_files", arguments: "{}" },
@@ -84,9 +148,17 @@ test("does not accept a provider completion rejected by tool-call limits", async
   assert.equal(provider.acceptedCompletions, 0);
 });
 class MockProvider implements ChatProvider {
-  readonly messages: ChatMessage[][] = []; private index = 0;
+  readonly messages: ChatMessage[][] = [];
+  private index = 0;
   acceptedCompletions = 0;
   constructor(private readonly responses: AssistantResponse[]) {}
-  async complete(messages: ChatMessage[], _tools: ToolDefinition[]): Promise<AssistantResponse> { this.messages.push([...messages]); const response = this.responses[this.index++]; if (!response) throw new Error("Mock provider exhausted."); return response; }
-  acceptCompletion(): void { this.acceptedCompletions += 1; }
+  complete(messages: ChatMessage[]): Promise<AssistantResponse> {
+    this.messages.push([...messages]);
+    const response = this.responses[this.index++];
+    if (!response) throw new Error("Mock provider exhausted.");
+    return Promise.resolve(response);
+  }
+  acceptCompletion(): void {
+    this.acceptedCompletions += 1;
+  }
 }

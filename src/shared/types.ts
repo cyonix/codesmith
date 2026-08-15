@@ -1,4 +1,5 @@
-export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+export type JsonValue =
+  string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 
 export interface ToolCall {
   id: string;
@@ -17,7 +18,10 @@ export interface ToolDefinition {
   function: { name: string; description: string; parameters: Record<string, JsonValue> };
 }
 
-export interface AssistantResponse { content?: string | null; toolCalls: ToolCall[]; }
+export interface AssistantResponse {
+  content?: string | null;
+  toolCalls: ToolCall[];
+}
 
 export interface ChatProvider {
   complete(messages: ChatMessage[], tools: ToolDefinition[]): Promise<AssistantResponse>;

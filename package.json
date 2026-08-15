@@ -18,11 +18,29 @@
   },
   "scripts": {
     "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc --project tsconfig.json",
+    "format": "prettier --write .",
+    "lint": "eslint \"src/**/*.ts\" \"tests/**/*.ts\" && prettier --check .",
+    "lint:fix": "eslint --fix \"src/**/*.ts\" \"tests/**/*.ts\"",
+    "prepare": "husky",
     "start": "npm run build && node dist/src/cli/main.js",
     "test": "npm run build && cd dist && node --test"
   },
+  "lint-staged": {
+    "*.ts": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "*.{js,json,md}": "prettier --write"
+  },
   "devDependencies": {
+    "@eslint/js": "10.0.1",
     "@types/node": "^22.15.0",
-    "typescript": "^5.9.0"
+    "eslint": "10.8.1",
+    "eslint-config-prettier": "10.1.8",
+    "husky": "9.1.7",
+    "lint-staged": "17.3.0",
+    "prettier": "3.9.6",
+    "typescript": "^5.9.0",
+    "typescript-eslint": "8.67.0"
   }
 }

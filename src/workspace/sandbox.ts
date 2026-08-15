@@ -6,7 +6,13 @@ import { CodeSmithError } from "../shared/errors.js";
 export class ProjectSandbox {
   readonly root: string;
 
-  private constructor(root: string, private readonly device: number, private readonly inode: number) { this.root = root; }
+  private constructor(
+    root: string,
+    private readonly device: number,
+    private readonly inode: number,
+  ) {
+    this.root = root;
+  }
 
   static async create(root: string): Promise<ProjectSandbox> {
     try {
@@ -28,13 +34,18 @@ export class ProjectSandbox {
     const canonical = await realpath(candidate).catch(() => candidate);
 
     if (!isContained(this.root, canonical)) {
-      throw new CodeSmithError("sandbox", `Path escapes the selected project root: ${relativePath}`);
+      throw new CodeSmithError(
+        "sandbox",
+        `Path escapes the selected project root: ${relativePath}`,
+      );
     }
 
     return canonical;
   }
 
-  relative(filePath: string): string { return path.relative(this.root, filePath); }
+  relative(filePath: string): string {
+    return path.relative(this.root, filePath);
+  }
 
   async assertUnchanged(): Promise<void> {
     const canonical = await realpath(this.root);
@@ -49,5 +60,8 @@ export class ProjectSandbox {
 export function isContained(root: string, candidate: string): boolean {
   const relative = path.relative(root, candidate);
 
-  return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
+  return (
+    relative === "" ||
+    (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative))
+  );
 }

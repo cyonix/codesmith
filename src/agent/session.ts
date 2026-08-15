@@ -24,20 +24,27 @@ export class AgentSession {
   private closed = false;
 
   private constructor(provider: ChatProvider, tools: ToolExecutor, maximumToolRounds?: number) {
-    this.loop = new AgentLoop(provider, tools, maximumToolRounds, (event) => this.emit(event), () => this.closed);
+    this.loop = new AgentLoop(
+      provider,
+      tools,
+      maximumToolRounds,
+      (event) => this.emit(event),
+      () => this.closed,
+    );
   }
 
   static async create(options: AgentSessionOptions): Promise<AgentSession> {
-    let session: AgentSession | undefined;
+    const sessionReference: { current?: AgentSession } = {};
 
     const tools = await ToolExecutor.create(
       options.projectRoot,
       options.autoApprove,
-      async (request) => session!.requestApproval(request),
-      () => session!.closed,
+      (request) => sessionReference.current!.requestApproval(request),
+      () => sessionReference.current!.closed,
     );
 
-    session = new AgentSession(options.provider, tools, options.maximumToolRounds);
+    const session = new AgentSession(options.provider, tools, options.maximumToolRounds);
+    sessionReference.current = session;
     return session;
   }
 
@@ -48,14 +55,18 @@ export class AgentSession {
 
   async submit(prompt: string): Promise<string> {
     if (this.closed) throw new CodeSmithError("loop", "This agent session is closed.");
-    if (this.active) throw new CodeSmithError("loop", "This agent session is already processing a prompt.");
+    if (this.active)
+      throw new CodeSmithError("loop", "This agent session is already processing a prompt.");
 
     this.active = true;
 
     try {
       return await this.loop.run(prompt);
     } catch (error) {
-      this.emit({ type: "error", message: error instanceof Error ? error.message : "Agent session failed." });
+      this.emit({
+        type: "error",
+        message: error instanceof Error ? error.message : "Agent session failed.",
+      });
       throw error;
     } finally {
       this.active = false;
@@ -90,7 +101,12 @@ export class AgentSession {
     return new Promise((resolve) => {
       this.pendingApprovals.set(requestId, { resolve });
       this.emit({ type: "status", phase: "waiting_for_approval" });
-      this.emit({ type: "approval_requested", requestId, kind: request.kind, summary: request.summary });
+      this.emit({
+        type: "approval_requested",
+        requestId,
+        kind: request.kind,
+        summary: request.summary,
+      });
     });
   }
 

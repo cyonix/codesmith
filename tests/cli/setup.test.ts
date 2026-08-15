@@ -3,19 +3,21 @@ import test from "node:test";
 import { modelCatalog } from "../../src/providers/model-catalog.js";
 import { selectModel } from "../../src/cli/setup.js";
 
-test("renders grouped models and retries invalid numeric selections", async () => {
+void test("renders grouped models and retries invalid numeric selections", async () => {
   const prompts: string[] = [];
-  let responses = ["not a number", "999", "2"];
+  const responses = ["not a number", "999", "2"];
   let output = "";
 
   const selection = await selectModel(
-    async (prompt) => {
+    (prompt) => {
       prompts.push(prompt);
       const response = responses.shift();
       assert.ok(response !== undefined);
-      return response;
+      return Promise.resolve(response);
     },
-    (value) => { output += value; },
+    (value) => {
+      output += value;
+    },
   );
 
   assert.equal(selection, modelCatalog[1]);

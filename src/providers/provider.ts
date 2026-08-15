@@ -1,5 +1,10 @@
 import { CodeSmithError } from "../shared/errors.js";
-import type { AssistantResponse, ChatMessage, ChatProvider, ToolDefinition } from "../shared/types.js";
+import type {
+  AssistantResponse,
+  ChatMessage,
+  ChatProvider,
+  ToolDefinition,
+} from "../shared/types.js";
 import { AnthropicProvider } from "./anthropic-provider.js";
 import { GeminiProvider } from "./gemini-provider.js";
 import { OpenAIProvider } from "./openai-provider.js";
@@ -27,7 +32,10 @@ export class ModelProvider implements ChatProvider {
         this.implementation = new GeminiProvider(configuration, fetcher);
         break;
       default:
-        throw new CodeSmithError("configuration", "The selected provider protocol is not supported.");
+        throw new CodeSmithError(
+          "configuration",
+          "The selected provider protocol is not supported.",
+        );
     }
   }
 

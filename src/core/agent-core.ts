@@ -1,9 +1,19 @@
 export { AgentSession, type AgentSessionOptions } from "../agent/session.js";
 
 export { ModelProvider, type ProviderConfiguration } from "../providers/provider.js";
-export { modelCatalog, modelCatalogGroups, type ModelCatalogEntry, type ModelTier, type ProviderProtocol } from "../providers/model-catalog.js";
+export {
+  modelCatalog,
+  modelCatalogGroups,
+  type ModelCatalogEntry,
+  type ModelTier,
+  type ProviderProtocol,
+} from "../providers/model-catalog.js";
 
-export { commandDescription, detectProjectProfile, validateCommand } from "../workspace/project-profile.js";
+export {
+  commandDescription,
+  detectProjectProfile,
+  validateCommand,
+} from "../workspace/project-profile.js";
 export type { ProjectCommand, ProjectKind, ProjectProfile } from "../workspace/project-profile.js";
 
 export type { AgentEvent, AgentEventListener } from "../agent/events.js";
