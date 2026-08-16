@@ -40,9 +40,15 @@ flowchart LR
   subgraph Local["Local Node.js process"]
     Session[AgentSession]
     Loop[AgentLoop]
+    Memory[EpisodicMemory]
+    Embedding[Local embedding runtime]
     Events[Typed event stream]
     Tools[ToolExecutor and sandbox]
     Provider[ModelProvider]
+  end
+
+  subgraph MemoryCache["Local model cache (outside the project)"]
+    Cache[Verified embedding model]
   end
 
   subgraph Workspace["Selected project root"]
@@ -57,6 +63,10 @@ flowchart LR
   UI --> Session
   Session --> Loop
   Session --> Events
+  Session --> Memory
+  Loop <--> Memory
+  Memory --> Embedding
+  Embedding --> Cache
   Loop --> Provider
   Provider <--> Model
   Loop --> Tools
@@ -65,6 +75,46 @@ flowchart LR
   Tools --> Commands
   Events --> CLI
   Events --> UI
+```
+
+### Semantic-memory request sequence
+
+This sequence applies only when the client enables semantic memory. Episode
+records stay in the current session. The local model cache stores only the
+reviewed embedding model.
+
+```mermaid
+sequenceDiagram
+  participant Client as CLI or UI
+  participant Session as AgentSession
+  participant Memory as EpisodicMemory
+  participant Cache as Local model cache
+  participant Loop as AgentLoop
+  participant Provider as ModelProvider
+  participant Model as Remote model
+  participant Tools as Sandboxed tools
+
+  Client->>Session: submit(prompt)
+  Session->>Memory: initialize()
+  alt Model is not verified in cache
+    Session->>Client: request model-download approval
+    Client-->>Session: approve
+    Memory->>Cache: download, verify, and install model
+  end
+  Session->>Loop: run(prompt)
+  Loop->>Memory: retrieve relevant episodes
+  Memory-->>Loop: bounded untrusted evidence
+  Loop->>Provider: send prompt and evidence guard
+  Provider->>Model: request completion
+  Model-->>Provider: text or tool calls
+  Provider-->>Loop: response
+  opt Model requests tools
+    Loop->>Tools: run approved tool
+    Tools-->>Loop: structured result
+    Loop->>Memory: record redacted result
+  end
+  Loop->>Memory: record final answer
+  Loop-->>Client: final response and events
 ```
 
 ## 3. Core components
