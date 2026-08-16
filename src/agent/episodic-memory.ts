@@ -1,6 +1,16 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { chmod, mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  open,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { InferenceSession, Tensor } from "onnxruntime-web";
@@ -17,6 +27,7 @@ const defaultSimilarityThreshold = 0.55;
 const chunkBytes = 1024;
 const lockWaitMilliseconds = 60_000;
 const staleLockMilliseconds = 10 * 60_000;
+const modelDownloadTimeoutMilliseconds = 120_000;
 
 export const reviewedEmbeddingModel = {
   id: "Xenova/bge-small-en-v1.5",
@@ -102,6 +113,7 @@ export class EpisodicMemory {
   private initialized = false;
   private blocked = false;
   private secretAccessedInSubmission = false;
+  private disposed = false;
 
   constructor(
     private readonly configuration: SemanticMemoryConfiguration,
@@ -111,6 +123,7 @@ export class EpisodicMemory {
   ) {}
 
   async initialize(approval: MemoryApproval): Promise<void> {
+    this.assertNotDisposed();
     if (this.initialized) {
       if (this.blocked)
         throw new CodeSmithError(
@@ -132,6 +145,7 @@ export class EpisodicMemory {
   }
 
   async retrieve(query: string): Promise<string | undefined> {
+    this.assertNotDisposed();
     this.assertReady();
     let retrieved: Array<{ episode: StoredEpisode; score: number }>;
     try {
@@ -174,6 +188,7 @@ export class EpisodicMemory {
   }
 
   async recordTool(call: ToolCall, result: string): Promise<void> {
+    if (this.disposed) return;
     if (touchesSecretFile(call.function.arguments) || resultReferencesSecretFile(result)) {
       this.secretAccessedInSubmission = true;
       return;
@@ -186,30 +201,38 @@ export class EpisodicMemory {
   }
 
   async recordAssistant(content: string): Promise<void> {
-    if (this.secretAccessedInSubmission) return;
+    if (this.disposed || this.secretAccessedInSubmission) return;
     await this.record("assistant", redactSensitiveText(content));
   }
 
   startSubmission(): void {
+    this.assertNotDisposed();
     this.secretAccessedInSubmission = false;
   }
 
   clear(): void {
+    this.assertNotDisposed();
     const count = this.episodes.length;
     this.episodes.splice(0);
     this.blocked = false;
     this.eventSink.cleared(count);
   }
 
+  dispose(): void {
+    this.disposed = true;
+    this.episodes.splice(0);
+  }
+
   private model: EmbeddingModel | undefined;
 
   private async record(kind: StoredEpisode["kind"], content: string): Promise<void> {
-    if (this.blocked) return;
+    if (this.disposed || this.blocked) return;
     try {
       const boundedContent = truncateUtf8(content, maximumEpisodeBytes);
       const chunks = await Promise.all(
         splitUtf8(boundedContent, chunkBytes).map((chunk) => this.embedding().embed(chunk)),
       );
+      if (this.disposed) return;
       const episode: StoredEpisode = { id: randomUUID(), kind, content: boundedContent, chunks };
       this.episodes.push(episode);
       while (this.episodes.length > maximumEpisodes) this.episodes.shift();
@@ -236,6 +259,11 @@ export class EpisodicMemory {
         "Episodic memory failed while recording and must be cleared before another submission.",
       );
     this.embedding();
+  }
+
+  private assertNotDisposed(): void {
+    if (this.disposed)
+      throw new CodeSmithError("memory", "This episodic-memory session is closed.");
   }
 }
 
@@ -339,6 +367,7 @@ export class ReviewedModelInstaller implements EmbeddingModelInstaller {
   constructor(
     private readonly cacheDirectory = defaultCacheDirectory(),
     private readonly fetcher: typeof fetch = fetch,
+    private readonly timeoutMilliseconds = modelDownloadTimeoutMilliseconds,
   ) {}
 
   async install(approval: MemoryApproval): Promise<string> {
@@ -352,6 +381,7 @@ export class ReviewedModelInstaller implements EmbeddingModelInstaller {
     await mkdir(this.cacheDirectory, { recursive: true, mode: 0o700 });
     const releaseLock = await this.acquireLock();
     try {
+      await this.removeStaleStagingDirectories();
       if (await this.verify(modelDirectory)) return modelDirectory;
       await rm(modelDirectory, { recursive: true, force: true });
 
@@ -384,27 +414,33 @@ export class ReviewedModelInstaller implements EmbeddingModelInstaller {
     const url = new URL(
       `https://huggingface.co/${reviewedEmbeddingModel.id}/resolve/${reviewedEmbeddingModel.revision}/${file.path}`,
     );
-    let response: Response;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.timeoutMilliseconds);
     try {
-      response = await this.fetcher(url);
-    } catch {
-      throw new CodeSmithError("memory", "The local embedding model could not be downloaded.");
-    }
-    if (!response.ok)
-      throw new CodeSmithError(
-        "memory",
-        `The local embedding model download failed with HTTP status ${response.status}.`,
-      );
-    const bytes = await boundedResponseBytes(response, file.bytes);
-    if (sha256For(bytes) !== file.sha256)
-      throw new CodeSmithError(
-        "memory",
-        "The downloaded embedding model failed its SHA-256 check.",
-      );
+      const response = await this.fetcher(url, { signal: controller.signal });
+      if (!response.ok)
+        throw new CodeSmithError(
+          "memory",
+          `The local embedding model download failed with HTTP status ${response.status}.`,
+        );
+      const bytes = await boundedResponseBytes(response, file.bytes);
+      if (sha256For(bytes) !== file.sha256)
+        throw new CodeSmithError(
+          "memory",
+          "The downloaded embedding model failed its SHA-256 check.",
+        );
 
-    const target = path.join(destination, file.path);
-    await mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
-    await writeFile(target, bytes, { mode: 0o600 });
+      const target = path.join(destination, file.path);
+      await mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
+      await writeFile(target, bytes, { mode: 0o600 });
+    } catch (error) {
+      if (error instanceof CodeSmithError) throw error;
+      if (controller.signal.aborted)
+        throw new CodeSmithError("memory", "The local embedding model download timed out.");
+      throw new CodeSmithError("memory", "The local embedding model could not be downloaded.");
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   private async verify(directory: string): Promise<boolean> {
@@ -414,9 +450,18 @@ export class ReviewedModelInstaller implements EmbeddingModelInstaller {
         const details = await stat(target);
         if (!details.isFile() || sha256For(await readFile(target)) !== file.sha256) return false;
       }
+
       return true;
     } catch {
       return false;
+    }
+  }
+
+  private async removeStaleStagingDirectories(): Promise<void> {
+    const prefix = `${reviewedEmbeddingModel.revision}.tmp-`;
+    for (const entry of await readdir(this.cacheDirectory, { withFileTypes: true })) {
+      if (entry.isDirectory() && entry.name.startsWith(prefix))
+        await rm(path.join(this.cacheDirectory, entry.name), { recursive: true, force: true });
     }
   }
 

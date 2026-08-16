@@ -218,6 +218,58 @@ void test("reclaims a stale embedding-model installation lock", async (context) 
   assert.deepEqual(await readdir(cacheDirectory), []);
 });
 
+void test("removes interrupted staging directories before installation", async (context) => {
+  const cacheDirectory = await mkdtemp(path.join(tmpdir(), "codesmith-memory-cache-"));
+  context.after(async () => rm(cacheDirectory, { recursive: true, force: true }));
+  const stagingDirectory = path.join(
+    cacheDirectory,
+    `${reviewedEmbeddingModel.revision}.tmp-interrupted`,
+  );
+  await mkdir(stagingDirectory, { recursive: true });
+  await writeFile(path.join(stagingDirectory, "partial"), "partial artifact");
+  const installer = new ReviewedModelInstaller(cacheDirectory, () =>
+    Promise.resolve(new Response(new Uint8Array(683), { headers: { "content-length": "683" } })),
+  );
+
+  await assert.rejects(() => installer.install(() => Promise.resolve(true)), /SHA-256 check/);
+  assert.deepEqual(await readdir(cacheDirectory), []);
+});
+
+void test("times out a stalled embedding-model download and releases its installation lock", async (context) => {
+  const cacheDirectory = await mkdtemp(path.join(tmpdir(), "codesmith-memory-cache-"));
+  context.after(async () => rm(cacheDirectory, { recursive: true, force: true }));
+  const installer = new ReviewedModelInstaller(
+    cacheDirectory,
+    (_input, init) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+      }),
+    1,
+  );
+
+  await assert.rejects(() => installer.install(() => Promise.resolve(true)), /timed out/);
+  assert.deepEqual(await readdir(cacheDirectory), []);
+});
+
+void test("does not retain an episode when memory is disposed while embedding", async () => {
+  const events = new EventSink();
+  const pending = new DeferredEmbeddingModel();
+  const memory = new EpisodicMemory(
+    configureSemanticMemory(true),
+    events,
+    { create: () => Promise.resolve(pending) },
+    new FakeInstaller(),
+  );
+  await memory.initialize(() => Promise.resolve(true));
+
+  const recording = memory.recordAssistant("Delayed episode");
+  memory.dispose();
+  pending.resolve([1, 0]);
+  await recording;
+
+  assert.equal(events.recordedEvents.length, 0);
+});
+
 class FakeInstaller implements EmbeddingModelInstaller {
   async install(approval: (summary: string) => Promise<boolean>): Promise<string> {
     if (!(await approval("Download local semantic-memory model?"))) throw new Error("declined");
@@ -237,6 +289,20 @@ class FakeEmbeddingModel implements EmbeddingModel {
   embed(text: string): Promise<number[]> {
     if (this.fail) return Promise.reject(new Error("embedding failed"));
     return Promise.resolve(text.includes("needle") || text.includes("README") ? [1, 0] : [0, 1]);
+  }
+}
+
+class DeferredEmbeddingModel implements EmbeddingModel {
+  private resolveEmbedding: ((embedding: number[]) => void) | undefined;
+
+  embed(): Promise<number[]> {
+    return new Promise((resolve) => {
+      this.resolveEmbedding = resolve;
+    });
+  }
+
+  resolve(embedding: number[]): void {
+    this.resolveEmbedding?.(embedding);
   }
 }
 

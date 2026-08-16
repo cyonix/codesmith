@@ -126,7 +126,7 @@ export class AgentSession {
     if (this.closed) return;
 
     this.closed = true;
-    this.memory?.clear();
+    this.memory?.dispose();
 
     for (const pending of this.pendingApprovals.values()) pending.resolve(false);
 

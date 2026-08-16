@@ -153,7 +153,7 @@ Google's retention terms before you choose a Gemini model.
 | `memory_recorded`    | An episodic-memory record was added                            |
 | `memory_retrieved`   | Relevant episode IDs and similarity scores informed a prompt   |
 | `memory_cleared`     | Episodic-memory records were discarded                         |
-| `memory_failed`      | Local memory initialization or recording failed                |
+| `memory_failed`      | Local memory initialization, retrieval, or recording failed    |
 | `error`              | The session or provider failed                                 |
 
 Agent Core does not read terminal input or render a user interface. The CLI

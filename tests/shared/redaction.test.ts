@@ -37,3 +37,11 @@ void test("redacts structured private-key fields", () => {
     '{"private_key":"[REDACTED]"}',
   );
 });
+
+void test("redacts complete quoted credential values with punctuation and escapes", () => {
+  const redacted = redactSensitiveText(
+    '{"password":"abc,def","token":"escaped \\"value\\", still secret"} password="correct horse"',
+  );
+
+  assert.equal(redacted, '{"password":"[REDACTED]","token":"[REDACTED]"} [REDACTED]');
+});

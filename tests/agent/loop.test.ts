@@ -4,6 +4,12 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { AgentLoop } from "../../src/agent/loop.js";
+import {
+  EpisodicMemory,
+  configureSemanticMemory,
+  type EmbeddingModel,
+  type MemoryEventSink,
+} from "../../src/agent/episodic-memory.js";
 import { ToolExecutor } from "../../src/workspace/tools.js";
 import type { AssistantResponse, ChatMessage, ChatProvider } from "../../src/shared/types.js";
 
@@ -147,6 +153,50 @@ void test("does not accept a provider completion rejected by tool-call limits", 
 
   assert.equal(provider.acceptedCompletions, 0);
 });
+void test("supplies retrieved memory as untrusted data only for the initial tool round", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const provider = new MockProvider([
+    { toolCalls: [{ id: "list", function: { name: "list_files", arguments: "{}" } }] },
+    { content: "Completed.", toolCalls: [] },
+  ]);
+  const memory = new EpisodicMemory(
+    configureSemanticMemory(true),
+    new LoopMemoryEvents(),
+    { create: () => Promise.resolve(new ConstantEmbeddingModel()) },
+    { install: () => Promise.resolve("/fake-model") },
+  );
+  await memory.initialize(() => Promise.resolve(true));
+  await memory.recordAssistant("UNTRUSTED EPISODIC DATA");
+  const loop = new AgentLoop(
+    provider,
+    await ToolExecutor.create(root, true),
+    12,
+    () => {},
+    () => false,
+    memory,
+  );
+
+  await loop.run("Inspect the project.");
+
+  const initialMessages = provider.messages[0] ?? [];
+  const retrievedIndex = initialMessages.findIndex(
+    (message) => message.role === "user" && message.content?.includes("Retrieved episodic data"),
+  );
+  const promptIndex = initialMessages.findIndex(
+    (message) => message.role === "user" && message.content === "Inspect the project.",
+  );
+  assert.ok(retrievedIndex > 0);
+  assert.ok(promptIndex > retrievedIndex);
+  assert.match(
+    initialMessages[retrievedIndex - 1]?.content ?? "",
+    /untrusted retrieved historical data/,
+  );
+  assert.equal(
+    provider.messages[1]?.some((message) => message.content?.includes("Retrieved episodic data")),
+    false,
+  );
+});
 class MockProvider implements ChatProvider {
   readonly messages: ChatMessage[][] = [];
   private index = 0;
@@ -158,7 +208,21 @@ class MockProvider implements ChatProvider {
     if (!response) throw new Error("Mock provider exhausted.");
     return Promise.resolve(response);
   }
+
   acceptCompletion(): void {
     this.acceptedCompletions += 1;
   }
+}
+
+class ConstantEmbeddingModel implements EmbeddingModel {
+  embed(): Promise<number[]> {
+    return Promise.resolve([1, 0]);
+  }
+}
+
+class LoopMemoryEvents implements MemoryEventSink {
+  recorded(): void {}
+  retrieved(): void {}
+  cleared(): void {}
+  failed(): void {}
 }
