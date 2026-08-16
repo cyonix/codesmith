@@ -1,5 +1,9 @@
 # CodeSmith
 
+> **Notice:** CodeSmith is an experimental learning project for exploring
+> agentic AI architecture. It is not designed, tested, or supported for
+> production use.
+
 CodeSmith is a local coding agent for projects that use TypeScript, Node.js,
 Swift, JavaScript, Python, Rust, or Go. It supports selected models from
 OpenAI, Anthropic, and Google Gemini. It keeps workspace access, approvals, and
