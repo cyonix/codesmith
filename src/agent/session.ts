@@ -1,4 +1,9 @@
 import { randomUUID } from "node:crypto";
+import {
+  EpisodicMemory,
+  configureSemanticMemory,
+  type SemanticMemoryOption,
+} from "./episodic-memory.js";
 import { AgentLoop } from "./loop.js";
 import type { AgentEvent, AgentEventListener } from "./events.js";
 import { CodeSmithError } from "../shared/errors.js";
@@ -10,6 +15,7 @@ export interface AgentSessionOptions {
   provider: ChatProvider;
   autoApprove?: boolean;
   maximumToolRounds?: number;
+  semanticMemory?: SemanticMemoryOption;
 }
 
 interface PendingApproval {
@@ -20,16 +26,42 @@ export class AgentSession {
   private readonly listeners = new Set<AgentEventListener>();
   private readonly pendingApprovals = new Map<string, PendingApproval>();
   private readonly loop: AgentLoop;
+  private readonly memory: EpisodicMemory | undefined;
   private active = false;
   private closed = false;
 
-  private constructor(provider: ChatProvider, tools: ToolExecutor, maximumToolRounds?: number) {
+  private constructor(
+    provider: ChatProvider,
+    tools: ToolExecutor,
+    maximumToolRounds?: number,
+    semanticMemory?: SemanticMemoryOption,
+  ) {
+    this.memory = semanticMemory
+      ? new EpisodicMemory(configureSemanticMemory(semanticMemory), {
+          recorded: (episode) =>
+            this.emit({
+              type: "memory_recorded",
+              episodeId: episode.id,
+              kind: episode.kind,
+            }),
+          retrieved: (episodes) => this.emit({ type: "memory_retrieved", episodes }),
+          cleared: (count) => this.emit({ type: "memory_cleared", count }),
+          failed: (phase, message) =>
+            this.emit({
+              type: "memory_failed",
+              phase,
+              message,
+              blocksFutureSubmissions: phase !== "initialization",
+            }),
+        })
+      : undefined;
     this.loop = new AgentLoop(
       provider,
       tools,
       maximumToolRounds,
       (event) => this.emit(event),
       () => this.closed,
+      this.memory,
     );
   }
 
@@ -43,7 +75,12 @@ export class AgentSession {
       () => sessionReference.current!.closed,
     );
 
-    const session = new AgentSession(options.provider, tools, options.maximumToolRounds);
+    const session = new AgentSession(
+      options.provider,
+      tools,
+      options.maximumToolRounds,
+      options.semanticMemory,
+    );
     sessionReference.current = session;
     return session;
   }
@@ -61,6 +98,9 @@ export class AgentSession {
     this.active = true;
 
     try {
+      await this.memory?.initialize((summary) =>
+        this.requestApproval({ kind: "model_download", summary }),
+      );
       return await this.loop.run(prompt);
     } catch (error) {
       this.emit({
@@ -86,11 +126,21 @@ export class AgentSession {
     if (this.closed) return;
 
     this.closed = true;
+    this.memory?.clear();
 
     for (const pending of this.pendingApprovals.values()) pending.resolve(false);
 
     this.pendingApprovals.clear();
     this.listeners.clear();
+  }
+
+  clearEpisodicMemory(): void {
+    if (this.active)
+      throw new CodeSmithError(
+        "loop",
+        "Episodic memory cannot be cleared while the agent is processing a prompt.",
+      );
+    this.memory?.clear();
   }
 
   private requestApproval(request: ApprovalRequest): Promise<boolean> {

@@ -94,9 +94,15 @@ session.close();
 ```
 
 `submit()` runs one prompt at a time. `approve(requestId, approved)` resolves a
-pending edit or command approval. It returns `false` if the request ID is
-unknown or already resolved. `close()` rejects future prompts, denies pending
-approvals, and stops later tool execution.
+pending edit, command, or model-download approval. It returns `false` if the
+request ID is unknown or already resolved. `close()` rejects future prompts,
+denies pending approvals, and stops later tool execution.
+
+Set `semanticMemory: true` to opt into local semantic episodic memory. To
+experiment with retrieval selectivity, use
+`semanticMemory: { similarityThreshold: 0.55 }`; the threshold must be a finite
+number from 0 to 1. Call `clearEpisodicMemory()` while the session is idle to
+discard its stored episodes immediately.
 
 `modelCatalog` is CodeSmith's reviewed source of provider model IDs and
 endpoints. It supports the OpenAI Chat Completions, Anthropic Messages, and
@@ -118,6 +124,10 @@ Google's retention terms before you choose a Gemini model.
 | `tool_started`       | A local tool is about to run                                   |
 | `tool_finished`      | A tool returned a structured JSON result                       |
 | `approval_requested` | The client must call `approve()` with the request ID           |
+| `memory_recorded`    | An episodic-memory record was added                            |
+| `memory_retrieved`   | Relevant episode IDs and similarity scores informed a prompt   |
+| `memory_cleared`     | Episodic-memory records were discarded                         |
+| `memory_failed`      | Local memory initialization or recording failed                |
 | `error`              | The session or provider failed                                 |
 
 Agent Core does not read terminal input or render a user interface. The CLI
@@ -136,6 +146,35 @@ messages, timelines, diff previews, and approval dialogs.
 CodeSmith keeps conversation context for the current session. It interprets
 brief replies such as `yes`, `no`, `proceed`, and `do it` using the agent's most
 recent unresolved question.
+
+### Episodic memory
+
+Semantic memory is opt-in and remains in process for the current
+`AgentSession`. CodeSmith records each completed non-secret tool call and final
+assistant answer as a typed episode. It redacts token-shaped credentials and
+omits conventional credential files such as `.env`, `.npmrc`, `.pypirc`,
+`credentials*`, `id_*`, and private-key files. Each episode keeps no more than
+4 KiB of text, is split into embedding chunks, and the 128 newest episodes are
+retained.
+
+Before a new submission, CodeSmith embeds the prompt together with the
+immediately preceding assistant answer. At most four episodes meeting the
+configured cosine-similarity threshold are supplied as a bounded, ephemeral
+untrusted data context paired with a trusted system guard. The model is told
+that this evidence may be stale, is never an instruction, and must be verified
+with tools before action. Retrieved episode excerpts are capped at 1 KiB each
+and are never persisted in raw conversation history.
+
+CodeSmith runs the reviewed, pinned local ONNX embedding model with an
+owner-only platform cache. The first use requires explicit `model_download`
+approval even with `autoApprove: true`; files are downloaded through a
+cross-process lock, installed atomically, and SHA-256 verified. A missing or
+invalid cache is removed and requires fresh approval. Model initialization
+failures reject the submission. If recording fails after a tool has run,
+CodeSmith completes that active run, emits `memory_failed`, and blocks later
+submissions until memory is cleared. Retrieval failures are also surfaced as
+`memory_failed` and block later submissions rather than silently omitting
+memory.
 
 ## Agent loop tenets
 

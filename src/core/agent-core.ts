@@ -1,4 +1,5 @@
 export { AgentSession, type AgentSessionOptions } from "../agent/session.js";
+export type { SemanticMemoryOption } from "../agent/episodic-memory.js";
 
 export { ModelProvider, type ProviderConfiguration } from "../providers/provider.js";
 export {

@@ -53,6 +53,19 @@ commands automatically.
 npm start -- --project /absolute/path/to/project --yes
 ```
 
+### Semantic episodic memory
+
+Pass `--semantic-memory` to retain bounded, in-process records of tool outcomes
+and final answers for the current session. Before its first use, CodeSmith asks
+for a separate approval to download a reviewed local embedding model. `--yes`
+does not approve this network download.
+
+The model is stored outside projects in `~/Library/Caches/codesmith` on macOS,
+`$XDG_CACHE_HOME/codesmith` (or `~/.cache/codesmith`) on Linux, and
+`%LOCALAPPDATA%\CodeSmith\Cache` on Windows. The cache contains only the
+reviewed model; session episodes are discarded when the session closes. Enter
+`/clear-memory` to discard the current session's episodes sooner.
+
 To end the session, enter `/exit` or `/quit`.
 
 ## Documentation

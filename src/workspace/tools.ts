@@ -42,7 +42,7 @@ const trustedCommandDirectories = [
 
 const commandPath = [...new Set(trustedCommandDirectories)].join(path.delimiter);
 
-export type ApprovalKind = "edit" | "command";
+export type ApprovalKind = "edit" | "command" | "model_download";
 export interface ApprovalRequest {
   kind: ApprovalKind;
   summary: string;
