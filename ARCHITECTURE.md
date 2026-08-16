@@ -139,8 +139,7 @@ recent unresolved question.
 
 ## Agent loop tenets
 
-Use these principles to guide future improvements to the agent loop. Each item
-stays unchecked until a focused pull request addresses it.
+CodeSmith follows these tenets when it runs an agent loop.
 
 - [ ] **Clear goals and completion criteria:** State the goal and how to tell
       when the work is complete before acting.
