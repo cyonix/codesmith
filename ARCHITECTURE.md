@@ -1,8 +1,34 @@
 # CodeSmith architecture
 
-This guide explains how CodeSmith is built and how its parts work together.
+> **Living document:** Use this guide to orient contributors and coding agents.
+> Update it when a layer boundary, public API, supported integration, or security
+> control changes.
 
-## System overview
+CodeSmith is an experimental, local TypeScript coding agent. This guide explains
+how its parts work together, where to make changes, and the controls that limit
+its access to a selected project.
+
+## 1. Project structure
+
+```text
+.
+├── src/
+│   ├── agent/       # Session lifecycle, agent loop, and typed events
+│   ├── cli/         # Interactive command-line entry point and setup
+│   ├── core/        # Public, UI-neutral package API
+│   ├── providers/   # Model catalog and provider protocol adapters
+│   ├── shared/      # Cross-layer types and errors
+│   └── workspace/   # Project sandbox, tools, and command policy
+├── tests/           # Tests that mirror the production domain folders
+├── README.md        # Project overview and local CLI setup
+└── ARCHITECTURE.md  # This architecture reference
+```
+
+Keep terminal interaction in `src/cli/`, the reusable public API in `src/core/`,
+and workspace access controls in `src/workspace/`. Provider-specific protocol
+code belongs in `src/providers/`, not in the agent loop.
+
+## 2. System overview
 
 ```mermaid
 flowchart LR
@@ -41,26 +67,26 @@ flowchart LR
   Events --> UI
 ```
 
-## Code layout
+## 3. Core components
 
-| Directory        | What it contains                                              |
-| ---------------- | ------------------------------------------------------------- |
-| `src/agent/`     | Session lifecycle, the agent loop, and emitted events         |
-| `src/providers/` | The model catalog and provider API adapters                   |
-| `src/workspace/` | Sandboxing, project profiles, command policy, and local tools |
-| `src/cli/`       | The CLI entry point and interactive setup                     |
-| `src/shared/`    | Error and protocol types shared across the codebase           |
-| `src/core/`      | The public, UI-neutral Agent Core facade                      |
-| `tests/`         | Tests that mirror the production domain folders               |
+| Component        | Responsibility                                                     |
+| ---------------- | ------------------------------------------------------------------ |
+| `src/agent/`     | Owns session lifecycle, bounded agent execution, and events        |
+| `src/providers/` | Adapts supported model protocols to the shared provider API        |
+| `src/workspace/` | Enforces sandboxing, tool approvals, and command allowlists        |
+| `src/cli/`       | Collects local input and renders approval prompts                  |
+| `src/shared/`    | Defines cross-layer types and error types                          |
+| `src/core/`      | Exposes the public, UI-neutral Agent Core API                      |
+| `tests/`         | Mirrors production domains with focused unit and integration tests |
 
 The public, UI-neutral entry point is `src/core/agent-core.ts`.
 
-### Use `ModelProvider`
+### Provider integration
 
 `ModelProvider` replaces `OpenAICompatibleProvider`. Pass it a `modelCatalog`
 entry and an API key, as shown below.
 
-## Use Agent Core
+### Agent Core integration
 
 Import the public entry point to use CodeSmith in a desktop or web client.
 
@@ -106,7 +132,7 @@ that `AgentSession` uses.
 Gemini Interactions keeps conversation state on Google-managed servers. Review
 Google's retention terms before you choose a Gemini model.
 
-### Handle events
+### Event contract
 
 `subscribe()` receives typed events that a GUI or TUI can use.
 
@@ -124,7 +150,7 @@ Agent Core does not read terminal input or render a user interface. The CLI
 uses `readline` for approval requests. A GUI can show the same events as chat
 messages, timelines, diff previews, and approval dialogs.
 
-## What happens after a prompt
+## 4. Request lifecycle
 
 1. A client sends a prompt to an `AgentSession`.
 2. The core sends limited conversation history and tool definitions to the
@@ -137,9 +163,9 @@ CodeSmith keeps conversation context for the current session. It interprets
 brief replies such as `yes`, `no`, `proceed`, and `do it` using the agent's most
 recent unresolved question.
 
-## Agent loop tenets
+## 5. Agent design principles
 
-CodeSmith follows these tenets when it runs an agent loop.
+CodeSmith follows these principles when it runs an agent loop.
 
 - [ ] **Clear goals and completion criteria:** State the goal and how to tell
       when the work is complete before acting.
@@ -169,7 +195,7 @@ CodeSmith follows these tenets when it runs an agent loop.
       blocker, the relevant evidence, and the exact input or decision that it
       needs.
 
-## Tools and approvals
+## 6. Workspace tools and approvals
 
 The model can request these local operations:
 
@@ -203,7 +229,20 @@ keep the same approval, output, timeout, cancellation, project-root, and
 non-secret-environment protections. Add support for a new ecosystem through an
 explicit profile instead of broader shell access.
 
-## Safety limits
+## 7. External integrations and state
+
+CodeSmith integrates with the OpenAI Chat Completions, Anthropic Messages, and
+Google Gemini Interactions APIs through `ModelProvider` and the reviewed
+`modelCatalog`. Provider adapters normalize each protocol's completions and tool
+calls into the shared agent interface.
+
+CodeSmith has no application database or hosted service. Conversation context is
+kept in memory for the active session and bounded by the agent loop. Provider
+credentials are supplied at startup and remain in the provider client for that
+process. Gemini Interactions can retain conversation state on Google-managed
+servers; review Google's retention terms before selecting a Gemini model.
+
+## 8. Security and safety boundaries
 
 - CodeSmith keeps workspace paths inside the selected canonical root. It rejects
   traversal, escaping symlinks, root replacement, and patches with multiple
@@ -222,7 +261,7 @@ explicit profile instead of broader shell access.
 - Provider credentials stay in the provider client. Provider error diagnostics
   are limited and redact configured and token-shaped credentials.
 
-## Develop CodeSmith
+## 9. Development and testing
 
 ```sh
 npm test
@@ -238,3 +277,24 @@ agent loop.
 Use `npm run lint:fix` to apply ESLint fixes. Use `npm run format` to format the
 repository with Prettier. The pre-commit hook runs both tools on supported
 staged files.
+
+## 10. Project identity
+
+| Field               | Value                                                          |
+| ------------------- | -------------------------------------------------------------- |
+| Project             | CodeSmith                                                      |
+| Repository          | `cyonix/codesmith`                                             |
+| Runtime             | Node.js 22+ and TypeScript                                     |
+| Architecture status | Experimental learning project; not intended for production use |
+| Last updated        | 2026-08-15                                                     |
+
+## 11. Glossary
+
+| Term                | Meaning                                                                                             |
+| ------------------- | --------------------------------------------------------------------------------------------------- |
+| **Agent Core**      | The UI-neutral public API exported from `src/core/agent-core.ts`.                                   |
+| **AgentSession**    | A single local conversation, including provider access, tool execution, events, and approval state. |
+| **ModelProvider**   | The provider facade that selects the correct protocol adapter from a catalog entry.                 |
+| **Project profile** | The detected project ecosystem and its fixed, allowlisted commands.                                 |
+| **Project sandbox** | The canonical selected project root and its containment checks.                                     |
+| **Tool executor**   | The workspace component that validates and performs approved local operations.                      |
