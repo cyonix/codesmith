@@ -128,7 +128,7 @@ export class EpisodicMemory {
       if (this.blocked)
         throw new CodeSmithError(
           "memory",
-          "Episodic memory failed while recording and must be cleared before another submission.",
+          "Episodic memory failed and must be cleared before another submission.",
         );
       return;
     }
@@ -188,7 +188,7 @@ export class EpisodicMemory {
   }
 
   async recordTool(call: ToolCall, result: string): Promise<void> {
-    if (this.disposed) return;
+    if (this.disposed || this.secretAccessedInSubmission) return;
     if (touchesSecretFile(call.function.arguments) || resultReferencesSecretFile(result)) {
       this.secretAccessedInSubmission = true;
       return;
@@ -256,7 +256,7 @@ export class EpisodicMemory {
     if (this.blocked)
       throw new CodeSmithError(
         "memory",
-        "Episodic memory failed while recording and must be cleared before another submission.",
+        "Episodic memory failed and must be cleared before another submission.",
       );
     this.embedding();
   }
@@ -655,7 +655,7 @@ function hasStringPath(value: unknown): value is { path: string } {
 }
 
 function isSecretPath(value: string): boolean {
-  const baseName = path.basename(value).toLocaleLowerCase();
+  const baseName = path.basename(value).toLowerCase();
   return (
     baseName === ".env" ||
     baseName.startsWith(".env.") ||

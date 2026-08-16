@@ -52,6 +52,7 @@ void test("omits conventional secret-file episodes and redacts token-shaped valu
     { id: "env", function: { name: "read_file", arguments: '{"path":".env.production"}' } },
     '{"content":"token=super-secret"}',
   );
+  memory.startSubmission();
   await memory.recordTool(
     { id: "read", function: { name: "read_file", arguments: '{"path":"README.md"}' } },
     '{"content":"token=super-secret"}',
@@ -119,6 +120,28 @@ void test("does not record an assistant answer after secret-file access", async 
   assert.equal(events.recordedEvents.length, 0);
 });
 
+void test("does not record later tool calls after secret-file access", async () => {
+  const events = new EventSink();
+  const memory = new EpisodicMemory(
+    configureSemanticMemory(true),
+    events,
+    new FakeFactory(),
+    new FakeInstaller(),
+  );
+  await memory.initialize(() => Promise.resolve(true));
+
+  await memory.recordTool(
+    { id: "env", function: { name: "read_file", arguments: '{"path":".env"}' } },
+    '{"content":"TOKEN=private"}',
+  );
+  await memory.recordTool(
+    { id: "search", function: { name: "search_files", arguments: '{"query":"private"}' } },
+    '{"matches":[]}',
+  );
+
+  assert.equal(events.recordedEvents.length, 0);
+});
+
 void test("omits service-account credential files", async () => {
   const events = new EventSink();
   const memory = new EpisodicMemory(
@@ -173,7 +196,7 @@ void test("blocks future submissions after a recording failure", async () => {
 
   await assert.rejects(
     () => memory.initialize(() => Promise.resolve(true)),
-    /must be cleared before another submission/,
+    /failed and must be cleared before another submission/,
   );
   assert.deepEqual(
     events.failedEvents.map((event) => event.phase),
