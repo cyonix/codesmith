@@ -16,9 +16,10 @@ code.
    apply to the changed paths.
 2. Identify the review target: staged changes, unstaged changes, a branch diff,
    or a pull request diff.
-3. Inspect the merge base, changed files, and full diffs before drawing
-   conclusions. Read enough unchanged context to understand control flow and
-   call sites.
+3. For branch or pull request reviews, inspect the merge base, changed files,
+   and full diffs before drawing conclusions. For staged or unstaged reviews,
+   inspect the applicable working-tree diff instead. Read enough unchanged
+   context to understand control flow and call sites.
 4. Treat a changed line as the anchor for each finding. Do not comment on an
    unchanged line unless the reviewed change directly makes it defective.
 
