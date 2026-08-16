@@ -1,8 +1,8 @@
-# CodeSmith Architecture
+# CodeSmith architecture
 
-This document describes how CodeSmith is structured, configured, and operated.
+This guide explains how CodeSmith is built and how its parts work together.
 
-## System design
+## System overview
 
 ```mermaid
 flowchart LR
@@ -41,30 +41,28 @@ flowchart LR
   Events --> UI
 ```
 
-## Source layout
+## Code layout
 
-| Directory        | Responsibility                                                |
+| Directory        | What it contains                                              |
 | ---------------- | ------------------------------------------------------------- |
-| `src/agent/`     | Session lifecycle, agent loop, and emitted events             |
-| `src/providers/` | Model catalog and provider API adapters                       |
+| `src/agent/`     | Session lifecycle, the agent loop, and emitted events         |
+| `src/providers/` | The model catalog and provider API adapters                   |
 | `src/workspace/` | Sandboxing, project profiles, command policy, and local tools |
-| `src/cli/`       | CLI entry point and interactive setup                         |
-| `src/shared/`    | Cross-domain error and protocol types                         |
-| `src/core/`      | Public, UI-neutral Agent Core facade                          |
-| `tests/`         | Tests mirroring the production domain folders                 |
+| `src/cli/`       | The CLI entry point and interactive setup                     |
+| `src/shared/`    | Error and protocol types shared across the codebase           |
+| `src/core/`      | The public, UI-neutral Agent Core facade                      |
+| `tests/`         | Tests that mirror the production domain folders               |
 
-`src/core/agent-core.ts` remains the package's public, UI-neutral entry point.
+The public, UI-neutral entry point is `src/core/agent-core.ts`.
 
-### Provider API migration
+### Use `ModelProvider`
 
-`ModelProvider` replaces the former `OpenAICompatibleProvider`. Construct it
-with an explicit `modelCatalog` entry and API key, as shown in the Agent Core
-API example below.
+`ModelProvider` replaces `OpenAICompatibleProvider`. Pass it a `modelCatalog`
+entry and an API key, as shown below.
 
-## Agent Core API
+## Use Agent Core
 
-Import the public core entry point to use the agent from a desktop or web
-client:
+Import the public entry point to use CodeSmith in a desktop or web client.
 
 ```ts
 import { AgentSession, ModelProvider, modelCatalog } from "codesmith";
@@ -95,71 +93,102 @@ unsubscribe();
 session.close();
 ```
 
-`submit()` processes one prompt at a time. `approve(requestId, approved)`
-resolves a pending edit or command approval and returns `false` for an unknown
-or already-resolved ID. `close()` rejects future prompts, denies pending
-approvals, and stops subsequent tool execution.
+`submit()` runs one prompt at a time. `approve(requestId, approved)` resolves a
+pending edit or command approval. It returns `false` if the request ID is
+unknown or already resolved. `close()` rejects future prompts, denies pending
+approvals, and stops later tool execution.
 
-`modelCatalog` is the reviewed, built-in source of provider model IDs and
-endpoints. It uses the OpenAI Chat Completions, Anthropic Messages, and Google
-Gemini Interactions APIs, normalizing their tool calls for `AgentSession`.
-Gemini Interactions uses Google-managed server-side conversation state to
-continue a session's tool calls and responses; review Google's retention terms
-before selecting a Gemini model.
+`modelCatalog` is CodeSmith's reviewed source of provider model IDs and
+endpoints. It supports the OpenAI Chat Completions, Anthropic Messages, and
+Google Gemini Interactions APIs. It converts their tool calls into the format
+that `AgentSession` uses.
 
-### Events
+Gemini Interactions keeps conversation state on Google-managed servers. Review
+Google's retention terms before you choose a Gemini model.
 
-`subscribe()` receives typed lifecycle events suitable for a GUI or TUI:
+### Handle events
 
-| Event                | Purpose                                                    |
-| -------------------- | ---------------------------------------------------------- |
-| `status`             | Agent is `thinking`, `waiting_for_approval`, or `complete` |
-| `assistant_text`     | Final assistant response text                              |
-| `tool_proposed`      | Model requested a tool call                                |
-| `tool_started`       | A local tool is about to execute                           |
-| `tool_finished`      | A tool completed with its structured JSON result           |
-| `approval_requested` | Client must call `approve()` with the supplied request ID  |
-| `error`              | Session or provider failure                                |
+`subscribe()` receives typed events that a GUI or TUI can use.
 
-The core does not own terminal input or UI rendering. The CLI uses `readline`
-to display approval requests; a GUI can render the same events as chat
+| Event                | Meaning                                                        |
+| -------------------- | -------------------------------------------------------------- |
+| `status`             | The agent is `thinking`, `waiting_for_approval`, or `complete` |
+| `assistant_text`     | The final text response from the agent                         |
+| `tool_proposed`      | The model asked to call a tool                                 |
+| `tool_started`       | A local tool is about to run                                   |
+| `tool_finished`      | A tool returned a structured JSON result                       |
+| `approval_requested` | The client must call `approve()` with the request ID           |
+| `error`              | The session or provider failed                                 |
+
+Agent Core does not read terminal input or render a user interface. The CLI
+uses `readline` for approval requests. A GUI can show the same events as chat
 messages, timelines, diff previews, and approval dialogs.
 
-## Agent execution flow
+## What happens after a prompt
 
-1. A client submits a prompt to an `AgentSession`.
-2. The core sends bounded conversation history and structured tool definitions
-   to the provider.
-3. The model returns assistant text or tool calls.
-4. Tool calls execute locally through the sandboxed executor, subject to
-   approval policy.
-5. Structured tool results return to the model until it produces a final
-   response.
+1. A client sends a prompt to an `AgentSession`.
+2. The core sends limited conversation history and tool definitions to the
+   provider.
+3. The model returns text or tool calls.
+4. The sandboxed executor runs approved tool calls on the local machine.
+5. The tool results return to the model until it gives a final response.
 
-Conversation context persists within a session. Brief replies such as `yes`,
-`no`, `proceed`, and `do it` are interpreted in the context of the agent's
-immediately preceding unresolved question.
+CodeSmith keeps conversation context for the current session. It interprets
+brief replies such as `yes`, `no`, `proceed`, and `do it` using the agent's most
+recent unresolved question.
 
-## Local tools and approvals
+## Agent loop tenets
 
-The provider can request these structured local operations:
+Use these principles to guide future improvements to the agent loop. Each item
+stays unchecked until a focused pull request addresses it.
+
+- [ ] **Clear goals and completion criteria:** State the goal and how to tell
+      when the work is complete before acting.
+- [ ] **Plan before side effects:** Make a clear plan that can change, then
+      take the smallest useful next action.
+- [ ] **Grounded context:** Use only the workspace, conversation, and tool
+      context needed for the current decision. State uncertainty instead of
+      guessing.
+- [ ] **Episodic tool-execution memory:** Record and retrieve relevant tool
+      actions, results, failures, and decisions. Bound, summarize, and remove that
+      history when it no longer applies.
+- [ ] **Typed, least-privilege tools:** Give the model narrow tools with clear
+      inputs, outputs, and permissions. Do not give it open-ended shell access.
+- [ ] **Human control at risk boundaries:** Ask for informed approval before
+      consequential actions. Show the proposed change and its scope.
+- [ ] **Observe, verify, and recover:** Use each tool result as evidence. Check
+      work against the goal, and show a safe recovery path when work fails.
+- [ ] **Bounded execution:** Limit iterations, tool calls, time, output, and
+      affected files. Do not let the loop run forever or expand its scope without
+      control.
+- [ ] **Traceable decisions:** Emit structured events that explain what the
+      agent did, why it acted, and which approvals and tool results informed it.
+- [ ] **Safe memory and state:** Keep only the session state needed for
+      continuity. Isolate credentials, and tell users about durable or
+      provider-managed state.
+- [ ] **Graceful handoff:** When the agent cannot safely continue, explain the
+      blocker, the relevant evidence, and the exact input or decision that it
+      needs.
+
+## Tools and approvals
+
+The model can request these local operations:
 
 - List, search, and read UTF-8 text files.
-- Create or delete a new/existing regular file directly in the selected
-  project root.
+- Create or delete a regular file in the selected project root.
 - Apply an exact, unique text replacement to an existing UTF-8 file.
 - Inspect `git status --short` and hardened `git diff`.
-- Run exact commands from the selected project's detected profile.
+- Run an exact command from the selected project's profile.
 
-All edits, Git operations, and commands require explicit approval unless
-`--yes` or `autoApprove: true` is used.
+CodeSmith asks for approval before every edit, Git operation, and command. It
+does not ask when you use `--yes` or set `autoApprove: true`.
 
 ### Project profiles
 
-CodeSmith detects project markers in the selected root and exposes only the
-matching exact commands. In mixed-language repositories, the profile combines
-the commands for every detected marker. If no marker is recognized, file and
-Git tools remain available but `run_command` exposes no commands.
+CodeSmith looks for project markers in the selected root. It exposes only the
+exact commands that match those markers. In a repository with more than one
+language, it combines the matching profiles. If it finds no marker, file and
+Git tools remain available, but `run_command` has no commands to run.
 
 | Profile                 | Detection                                           | Exact commands                                                                         |
 | ----------------------- | --------------------------------------------------- | -------------------------------------------------------------------------------------- |
@@ -170,30 +199,31 @@ Git tools remain available but `run_command` exposes no commands.
 | Rust                    | `Cargo.toml`                                        | `cargo build`, `cargo test`, `cargo clippy`                                            |
 | Go                      | `go.mod`                                            | `go build ./...`, `go test ./...`                                                      |
 
-Commands never run through a shell, cannot accept model-supplied flags or
-arguments, and retain the same approval, output, timeout, cancellation,
-project-root, and non-secret-environment protections. New ecosystem support is
-added as an explicit profile rather than widening shell access.
+Commands never use a shell. The model cannot add flags or arguments. Commands
+keep the same approval, output, timeout, cancellation, project-root, and
+non-secret-environment protections. Add support for a new ecosystem through an
+explicit profile instead of broader shell access.
 
-## Safety model
+## Safety limits
 
-- All workspace paths are constrained to the canonical selected root. Traversal,
-  escaping symlinks, root replacement, and multi-link patch targets are
-  rejected.
-- `.git` internals are blocked, including Git worktree pointer files.
-- Creation and deletion are deliberately limited to root-level files. Create
-  directories manually before asking the agent to edit nested paths.
-- Patch content and created-file content are capped at 500 characters and 10
-  MB. Edit previews escape terminal control characters.
+- CodeSmith keeps workspace paths inside the selected canonical root. It rejects
+  traversal, escaping symlinks, root replacement, and patches with multiple
+  links.
+- It blocks `.git` internals, including Git worktree pointer files.
+- It creates and deletes files only at the project root. Create directories
+  yourself before asking CodeSmith to edit a nested file.
+- Patch fragments can contain at most 500 characters. New-file content can
+  contain at most 500 characters and 1 MB. Edit previews escape terminal
+  control characters.
 - Commands run without a shell and with a fixed, non-secret `PATH`.
 - Commands and Git inspection use a minimal subprocess environment. Git diff
   disables external diff and text-conversion helpers.
-- Closing a session prevents new side effects and terminates active command
-  process groups.
+- Closing a session blocks new side effects and ends active command process
+  groups.
 - Provider credentials stay in the provider client. Provider error diagnostics
-  are bounded and redact configured and token-shaped credentials.
+  are limited and redact configured and token-shaped credentials.
 
-## Development
+## Develop CodeSmith
 
 ```sh
 npm test
@@ -206,6 +236,6 @@ lifecycle and approval events, sandbox containment,
 symlink/hard-link/root-replacement protections, tool approvals, and the mocked
 agent loop.
 
-Use `npm run lint:fix` to apply ESLint fixes and `npm run format` to format the
-repository with Prettier. The pre-commit hook automatically applies both tools
-to supported staged files.
+Use `npm run lint:fix` to apply ESLint fixes. Use `npm run format` to format the
+repository with Prettier. The pre-commit hook runs both tools on supported
+staged files.
