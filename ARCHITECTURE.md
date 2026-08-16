@@ -61,36 +61,6 @@ flowchart LR
 with an explicit `modelCatalog` entry and API key, as shown in the Agent Core
 API example below.
 
-## Running the CLI
-
-### Requirements
-
-- Node.js 22 or newer
-- An API key for a supported OpenAI, Anthropic, or Google Gemini model
-
-### Setup
-
-```sh
-npm install
-
-npm start -- --project /absolute/path/to/project
-```
-
-At startup, CodeSmith displays a grouped, numbered catalog of current
-tool-capable models from OpenAI, Anthropic, and Google Gemini. Choose a model
-number, then enter that provider's API key in a masked prompt. The key exists
-only for the current process and is never read from or written to environment
-variables, files, or a keychain.
-
-Use `--yes` only when you want to automatically approve every proposed edit,
-Git inspection, and allowlisted command:
-
-```sh
-npm start -- --project /absolute/path/to/project --yes
-```
-
-Type `/exit` or `/quit` to end an interactive CLI session.
-
 ## Agent Core API
 
 Import the public core entry point to use the agent from a desktop or web
