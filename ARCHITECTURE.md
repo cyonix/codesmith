@@ -89,7 +89,7 @@ sequenceDiagram
   participant Session as AgentSession
   participant Memory as EpisodicMemory
   participant Cache as Local model cache
-  participant Loop as AgentLoop
+  participant Agent as AgentLoop
   participant Provider as ModelProvider
   participant Model as Remote model
   participant Tools as Sandboxed tools
@@ -101,20 +101,20 @@ sequenceDiagram
     Client-->>Session: approve
     Memory->>Cache: download, verify, and install model
   end
-  Session->>Loop: run(prompt)
-  Loop->>Memory: retrieve relevant episodes
-  Memory-->>Loop: bounded untrusted evidence
-  Loop->>Provider: send prompt and evidence guard
+  Session->>Agent: run(prompt)
+  Agent->>Memory: retrieve relevant episodes
+  Memory-->>Agent: bounded untrusted evidence
+  Agent->>Provider: send prompt and evidence guard
   Provider->>Model: request completion
   Model-->>Provider: text or tool calls
-  Provider-->>Loop: response
+  Provider-->>Agent: response
   opt Model requests tools
-    Loop->>Tools: run approved tool
-    Tools-->>Loop: structured result
-    Loop->>Memory: record redacted result
+    Agent->>Tools: run approved tool
+    Tools-->>Agent: structured result
+    Agent->>Memory: record redacted result
   end
-  Loop->>Memory: record final answer
-  Loop-->>Client: final response and events
+  Agent->>Memory: record final answer
+  Agent-->>Client: final response and events
 ```
 
 ## 3. Core components
