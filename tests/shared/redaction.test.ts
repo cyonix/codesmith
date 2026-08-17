@@ -59,6 +59,15 @@ void test("redacts credential fields nested in JSON tool results", () => {
   assert.deepEqual(JSON.parse(redacted), { content: '{"api_key":"[REDACTED]"}' });
 });
 
+void test("redacts URL-userinfo credentials in tool results", () => {
+  const redacted = redactSensitiveText(
+    JSON.stringify({ content: "DATABASE_URL=postgres://user:password@host/db" }),
+  );
+
+  assert.doesNotMatch(redacted, /user:password/);
+  assert.match(redacted, /postgres:\/\/\[REDACTED\]@host\/db/);
+});
+
 void test("redacts raw PEM private-key blocks", () => {
   const redacted = redactSensitiveText(
     "-----BEGIN RSA PRIVATE KEY-----\nprivate key material\n-----END RSA PRIVATE KEY-----",

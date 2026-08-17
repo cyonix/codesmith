@@ -300,9 +300,14 @@ void test("serializes simultaneous stale-lock recovery", async (context) => {
   const cacheDirectory = await mkdtemp(path.join(tmpdir(), "codesmith-memory-cache-"));
   context.after(async () => rm(cacheDirectory, { recursive: true, force: true }));
   const lockPath = path.join(cacheDirectory, `${reviewedEmbeddingModel.revision}.lock`);
+  const reaperLockPath = `${lockPath}.reaper`;
   await writeFile(lockPath, "interrupted installation");
+  await writeFile(reaperLockPath, "interrupted reaper");
   const staleDate = new Date(Date.now() - 11 * 60_000);
-  await utimes(lockPath, staleDate, staleDate);
+  await Promise.all([
+    utimes(lockPath, staleDate, staleDate),
+    utimes(reaperLockPath, staleDate, staleDate),
+  ]);
 
   let fetchCalls = 0;
   let releaseFirstFetch: (() => void) | undefined;
@@ -398,6 +403,33 @@ void test("does not retain an episode when memory is disposed while embedding", 
   await recording;
 
   assert.equal(events.recordedEvents.length, 0);
+  assert.equal(pending.disposed, true);
+});
+
+void test("disposes a model that finishes initialization after memory closes", async () => {
+  const events = new EventSink();
+  const model = new DeferredEmbeddingModel();
+  let resolveFactory: ((model: EmbeddingModel) => void) | undefined;
+  const memory = new EpisodicMemory(
+    configureSemanticMemory(true),
+    events,
+    {
+      create: () =>
+        new Promise<EmbeddingModel>((resolve) => {
+          resolveFactory = resolve;
+        }),
+    },
+    new FakeInstaller(),
+  );
+
+  const initialization = memory.initialize(() => Promise.resolve(true));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  memory.dispose();
+  assert.ok(resolveFactory);
+  resolveFactory(model);
+  await initialization;
+
+  assert.equal(model.disposed, true);
 });
 
 class FakeInstaller implements EmbeddingModelInstaller {
@@ -424,6 +456,7 @@ class FakeEmbeddingModel implements EmbeddingModel {
 
 class DeferredEmbeddingModel implements EmbeddingModel {
   private resolveEmbedding: ((embedding: number[]) => void) | undefined;
+  disposed = false;
 
   embed(): Promise<number[]> {
     return new Promise((resolve) => {
@@ -433,6 +466,11 @@ class DeferredEmbeddingModel implements EmbeddingModel {
 
   resolve(embedding: number[]): void {
     this.resolveEmbedding?.(embedding);
+  }
+
+  dispose(): Promise<void> {
+    this.disposed = true;
+    return Promise.resolve();
   }
 }
 

@@ -105,6 +105,7 @@ interface EmbeddedChunk {
 
 export interface EmbeddingModel {
   embed(text: string): Promise<number[]>;
+  dispose?(): Promise<void>;
 }
 
 export interface EmbeddingModelFactory {
@@ -142,7 +143,12 @@ export class EpisodicMemory {
 
     try {
       const directory = await this.installer.install(approval);
-      this.model = await this.modelFactory.create(directory);
+      const model = await this.modelFactory.create(directory);
+      if (this.disposed) {
+        await model.dispose?.();
+        return;
+      }
+      this.model = model;
       this.initialized = true;
     } catch (error) {
       const message = memoryErrorMessage(error);
@@ -236,6 +242,9 @@ export class EpisodicMemory {
   dispose(): void {
     this.disposed = true;
     this.episodes.splice(0);
+    const model = this.model;
+    this.model = undefined;
+    void model?.dispose?.();
   }
 
   private model: EmbeddingModel | undefined;
@@ -356,6 +365,10 @@ class LocalEmbeddingModel implements EmbeddingModel {
       throw new CodeSmithError("memory", "The local embedding model returned no attended tokens.");
 
     return normalize(pooled.map((value) => value / includedTokens));
+  }
+
+  dispose(): Promise<void> {
+    return this.session.release();
   }
 }
 
@@ -552,20 +565,58 @@ export class ReviewedModelInstaller implements EmbeddingModelInstaller {
   }
 
   private async reclaimOrphanedReaperLock(reaperLockPath: string): Promise<boolean> {
+    const claimPath = `${reaperLockPath}.claim`;
+    let ownsClaim = false;
     try {
       if (!(await this.isStaleLock(reaperLockPath))) return false;
-      const claimPath = `${reaperLockPath}.claim`;
       try {
         await link(reaperLockPath, claimPath);
+        ownsClaim = true;
       } catch (error) {
-        if (!(error instanceof Error) || !("code" in error) || error.code !== "EEXIST") throw error;
+        if (error instanceof Error && "code" in error && error.code === "EEXIST")
+          return this.reclaimStaleReaperClaim(reaperLockPath, claimPath);
+        throw error;
       }
       await rm(reaperLockPath, { force: true });
-      await rm(claimPath, { force: true });
       return true;
     } catch (error) {
       if (error instanceof Error && "code" in error && error.code === "ENOENT") return true;
       throw error;
+    } finally {
+      if (ownsClaim) await rm(claimPath, { force: true });
+    }
+  }
+
+  private async reclaimStaleReaperClaim(
+    reaperLockPath: string,
+    claimPath: string,
+  ): Promise<boolean> {
+    const details = await stat(claimPath);
+    if (Date.now() - details.mtimeMs <= staleLockMilliseconds) return false;
+    const recoveryPath = `${claimPath}.recovery`;
+    let recoveryHandle;
+    try {
+      recoveryHandle = await open(
+        recoveryPath,
+        constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY,
+        0o600,
+      );
+      await recoveryHandle.writeFile(
+        JSON.stringify({ pid: process.pid, createdAt: Date.now() }),
+        "utf8",
+      );
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "EEXIST") return false;
+      throw error;
+    }
+    try {
+      if (!(await this.isStaleLock(reaperLockPath))) return false;
+      await rm(reaperLockPath, { force: true });
+      return true;
+    } finally {
+      await recoveryHandle.close();
+      await rm(recoveryPath, { force: true });
+      await rm(claimPath, { force: true });
     }
   }
 
@@ -587,7 +638,12 @@ function defaultCacheDirectory(): string {
       "CodeSmith",
       "Cache",
     );
-  return path.join(process.env.XDG_CACHE_HOME ?? path.join(os.homedir(), ".cache"), "codesmith");
+  const xdgCacheHome = process.env.XDG_CACHE_HOME;
+  const cacheHome =
+    xdgCacheHome && path.isAbsolute(xdgCacheHome)
+      ? xdgCacheHome
+      : path.join(os.homedir(), ".cache");
+  return path.join(cacheHome, "codesmith");
 }
 
 function downloadSummary(modelDirectory: string): string {
