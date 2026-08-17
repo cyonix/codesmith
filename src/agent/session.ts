@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import {
   EpisodicMemory,
   configureSemanticMemory,
+  type MemoryEventSink,
+  type SemanticMemoryConfiguration,
   type SemanticMemoryOption,
 } from "./episodic-memory.js";
 import { AgentLoop } from "./loop.js";
@@ -16,6 +18,13 @@ export interface AgentSessionOptions {
   autoApprove?: boolean;
   maximumToolRounds?: number;
   semanticMemory?: SemanticMemoryOption;
+}
+
+export interface AgentSessionDependencies {
+  createMemory?: (
+    configuration: SemanticMemoryConfiguration,
+    eventSink: MemoryEventSink,
+  ) => EpisodicMemory;
 }
 
 interface PendingApproval {
@@ -35,9 +44,14 @@ export class AgentSession {
     tools: ToolExecutor,
     maximumToolRounds?: number,
     semanticMemory?: SemanticMemoryOption,
+    createMemory: (
+      configuration: SemanticMemoryConfiguration,
+      eventSink: MemoryEventSink,
+    ) => EpisodicMemory = (configuration, eventSink) =>
+      new EpisodicMemory(configuration, eventSink),
   ) {
     this.memory = semanticMemory
-      ? new EpisodicMemory(configureSemanticMemory(semanticMemory), {
+      ? createMemory(configureSemanticMemory(semanticMemory), {
           recorded: (episode) =>
             this.emit({
               type: "memory_recorded",
@@ -65,7 +79,10 @@ export class AgentSession {
     );
   }
 
-  static async create(options: AgentSessionOptions): Promise<AgentSession> {
+  static async create(
+    options: AgentSessionOptions,
+    dependencies: AgentSessionDependencies = {},
+  ): Promise<AgentSession> {
     const sessionReference: { current?: AgentSession } = {};
 
     const tools = await ToolExecutor.create(
@@ -80,6 +97,7 @@ export class AgentSession {
       tools,
       options.maximumToolRounds,
       options.semanticMemory,
+      dependencies.createMemory,
     );
     sessionReference.current = session;
     return session;

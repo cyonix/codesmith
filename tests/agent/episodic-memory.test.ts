@@ -38,6 +38,22 @@ void test("retrieves bounded relevant tool episodes and emits lifecycle events",
   assert.equal(events.failedEvents.length, 0);
 });
 
+void test("returns the best-matching chunk from a multi-chunk episode", async () => {
+  const events = new EventSink();
+  const memory = new EpisodicMemory(
+    configureSemanticMemory(true),
+    events,
+    new FakeFactory(),
+    new FakeInstaller(),
+  );
+  await memory.initialize(() => Promise.resolve(true));
+  await memory.recordAssistant(`${"unrelated context ".repeat(100)}semantic memory needle`);
+
+  const retrieved = await memory.retrieve("semantic memory needle");
+
+  assert.match(retrieved ?? "", /semantic memory needle/);
+});
+
 void test("omits conventional secret-file episodes and redacts token-shaped values", async () => {
   const events = new EventSink();
   const memory = new EpisodicMemory(
@@ -292,6 +308,26 @@ void test("serializes simultaneous stale-lock recovery", async (context) => {
   assert.ok(releaseFirstFetch);
   releaseFirstFetch();
   await Promise.allSettled([first, second]);
+});
+
+void test("reclaims an orphaned stale-lock reaper", async (context) => {
+  const cacheDirectory = await mkdtemp(path.join(tmpdir(), "codesmith-memory-cache-"));
+  context.after(async () => rm(cacheDirectory, { recursive: true, force: true }));
+  const lockPath = path.join(cacheDirectory, `${reviewedEmbeddingModel.revision}.lock`);
+  const reaperLockPath = `${lockPath}.reaper`;
+  const staleDate = new Date(Date.now() - 11 * 60_000);
+  await writeFile(lockPath, "interrupted installation");
+  await writeFile(reaperLockPath, "interrupted reaper");
+  await Promise.all([
+    utimes(lockPath, staleDate, staleDate),
+    utimes(reaperLockPath, staleDate, staleDate),
+  ]);
+  const installer = new ReviewedModelInstaller(cacheDirectory, () =>
+    Promise.resolve(new Response(new Uint8Array(683), { headers: { "content-length": "683" } })),
+  );
+
+  await assert.rejects(() => installer.install(() => Promise.resolve(true)), /SHA-256 check/);
+  assert.deepEqual(await readdir(cacheDirectory), []);
 });
 
 void test("removes interrupted staging directories before installation", async (context) => {
