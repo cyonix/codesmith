@@ -163,6 +163,27 @@ void test("omits service-account credential files", async () => {
   assert.equal(events.recordedEvents.length, 0);
 });
 
+void test("omits conventional credential files", async () => {
+  const events = new EventSink();
+  const memory = new EpisodicMemory(
+    configureSemanticMemory(true),
+    events,
+    new FakeFactory(),
+    new FakeInstaller(),
+  );
+  await memory.initialize(() => Promise.resolve(true));
+
+  await memory.recordTool(
+    {
+      id: "git-credentials",
+      function: { name: "read_file", arguments: '{"path":".git-credentials"}' },
+    },
+    '{"content":"https://user:password@example.com"}',
+  );
+
+  assert.equal(events.recordedEvents.length, 0);
+});
+
 void test("evicts the oldest episode at the configured bound and clears memory", async () => {
   const events = new EventSink();
   const memory = new EpisodicMemory(
@@ -239,6 +260,38 @@ void test("reclaims a stale embedding-model installation lock", async (context) 
 
   await assert.rejects(() => installer.install(() => Promise.resolve(true)), /SHA-256 check/);
   assert.deepEqual(await readdir(cacheDirectory), []);
+});
+
+void test("serializes simultaneous stale-lock recovery", async (context) => {
+  const cacheDirectory = await mkdtemp(path.join(tmpdir(), "codesmith-memory-cache-"));
+  context.after(async () => rm(cacheDirectory, { recursive: true, force: true }));
+  const lockPath = path.join(cacheDirectory, `${reviewedEmbeddingModel.revision}.lock`);
+  await writeFile(lockPath, "interrupted installation");
+  const staleDate = new Date(Date.now() - 11 * 60_000);
+  await utimes(lockPath, staleDate, staleDate);
+
+  let fetchCalls = 0;
+  let releaseFirstFetch: (() => void) | undefined;
+  const fetcher = () => {
+    fetchCalls += 1;
+    const response = new Response(new Uint8Array(683), { headers: { "content-length": "683" } });
+    if (fetchCalls > 1) return Promise.resolve(response);
+    return new Promise<Response>((resolve) => {
+      releaseFirstFetch = () => resolve(response);
+    });
+  };
+  const first = new ReviewedModelInstaller(cacheDirectory, fetcher).install(() =>
+    Promise.resolve(true),
+  );
+  const second = new ReviewedModelInstaller(cacheDirectory, fetcher).install(() =>
+    Promise.resolve(true),
+  );
+
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  assert.equal(fetchCalls, 1);
+  assert.ok(releaseFirstFetch);
+  releaseFirstFetch();
+  await Promise.allSettled([first, second]);
 });
 
 void test("removes interrupted staging directories before installation", async (context) => {

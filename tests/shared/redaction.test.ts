@@ -46,6 +46,12 @@ void test("redacts complete quoted credential values with punctuation and escape
   assert.equal(redacted, '{"password":"[REDACTED]","token":"[REDACTED]"} [REDACTED]');
 });
 
+void test("redacts complete unquoted credential values with commas", () => {
+  const redacted = redactSensitiveText("PASSWORD=abc,def");
+
+  assert.equal(redacted, "[REDACTED]");
+});
+
 void test("redacts raw PEM private-key blocks", () => {
   const redacted = redactSensitiveText(
     "-----BEGIN RSA PRIVATE KEY-----\nprivate key material\n-----END RSA PRIVATE KEY-----",

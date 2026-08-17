@@ -493,6 +493,8 @@ export class ReviewedModelInstaller implements EmbeddingModelInstaller {
   }
 
   private async reclaimStaleLock(lockPath: string): Promise<boolean> {
+    const releaseReaperLock = await this.acquireReaperLock(lockPath);
+    if (!releaseReaperLock) return false;
     try {
       const details = await stat(lockPath);
       const record = parseLockRecord(await readFile(lockPath, "utf8"));
@@ -507,6 +509,26 @@ export class ReviewedModelInstaller implements EmbeddingModelInstaller {
       return false;
     } catch (error) {
       if (error instanceof Error && "code" in error && error.code === "ENOENT") return true;
+      throw error;
+    } finally {
+      await releaseReaperLock();
+    }
+  }
+
+  private async acquireReaperLock(lockPath: string): Promise<(() => Promise<void>) | undefined> {
+    const reaperLockPath = `${lockPath}.reaper`;
+    try {
+      const handle = await open(
+        reaperLockPath,
+        constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY,
+        0o600,
+      );
+      return async () => {
+        await handle.close();
+        await rm(reaperLockPath, { force: true });
+      };
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "EEXIST") return undefined;
       throw error;
     }
   }
@@ -659,6 +681,8 @@ function isSecretPath(value: string): boolean {
   return (
     baseName === ".env" ||
     baseName.startsWith(".env.") ||
+    baseName === ".git-credentials" ||
+    baseName === ".netrc" ||
     baseName === ".npmrc" ||
     baseName === ".pypirc" ||
     baseName.startsWith("credentials") ||
