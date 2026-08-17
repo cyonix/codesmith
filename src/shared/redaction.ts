@@ -1,7 +1,7 @@
 export function redactSensitiveText(value: string): string {
   return value
     .replace(
-      /-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?-----END [^-]*PRIVATE KEY-----/g,
+      /-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?(?:-----END [^-]*PRIVATE KEY-----|$)/g,
       "[REDACTED PRIVATE KEY]",
     )
     .replace(/\bBearer\s+[^\s"'`,;:}\]]+/gi, "[REDACTED]")

@@ -511,7 +511,16 @@ export class ReviewedModelInstaller implements EmbeddingModelInstaller {
           constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY,
           0o600,
         );
-        await handle.writeFile(JSON.stringify({ pid: process.pid, createdAt: Date.now() }), "utf8");
+        try {
+          await handle.writeFile(
+            JSON.stringify({ pid: process.pid, createdAt: Date.now() }),
+            "utf8",
+          );
+        } catch (error) {
+          await handle.close();
+          await rm(lockPath, { force: true });
+          throw error;
+        }
         return async () => {
           await handle.close();
           await rm(lockPath, { force: true });
@@ -606,13 +615,22 @@ export class ReviewedModelInstaller implements EmbeddingModelInstaller {
         "utf8",
       );
     } catch (error) {
-      if (error instanceof Error && "code" in error && error.code === "EEXIST") return false;
+      if (error instanceof Error && "code" in error && error.code === "EEXIST") {
+        if (await this.isStaleLock(recoveryPath)) {
+          await rm(recoveryPath, { force: true });
+          return this.reclaimStaleReaperClaim(reaperLockPath, claimPath);
+        }
+        return false;
+      }
       throw error;
     }
     try {
       if (!(await this.isStaleLock(reaperLockPath))) return false;
       await rm(reaperLockPath, { force: true });
       return true;
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") return true;
+      throw error;
     } finally {
       await recoveryHandle.close();
       await rm(recoveryPath, { force: true });
@@ -777,7 +795,7 @@ function containsSecretPath(value: unknown): boolean {
 function containsSensitiveDiff(value: unknown): boolean {
   if (typeof value === "string")
     return value.split("\n").some((line) => {
-      if (!/^\+(?!\+\+)/.test(line)) return false;
+      if (!/^[+-](?![+-])/.test(line)) return false;
       return (
         /(?:api[_-]?key|private[_-]?key|token|secret|password|database[_-]?url)\s*[:=]/i.test(
           line,

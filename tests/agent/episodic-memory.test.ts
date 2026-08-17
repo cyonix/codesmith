@@ -135,6 +135,25 @@ void test("omits Git diffs containing credentials in regular files", async () =>
   assert.equal(events.recordedEvents.length, 0);
 });
 
+void test("omits Git diffs removing credentials from regular files", async () => {
+  const events = new EventSink();
+  const memory = new EpisodicMemory(
+    configureSemanticMemory(true),
+    events,
+    new FakeFactory(),
+    new FakeInstaller(),
+  );
+  await memory.initialize(() => Promise.resolve(true));
+
+  await memory.recordTool(
+    { id: "diff", function: { name: "git_diff", arguments: "{}" } },
+    '{"stdout":"diff --git a/config.ts b/config.ts\\n-DATABASE_URL=postgres://user:password@host/db"}',
+  );
+  await memory.recordAssistant("The configuration was updated.");
+
+  assert.equal(events.recordedEvents.length, 0);
+});
+
 void test("does not record an assistant answer after secret-file access", async () => {
   const events = new EventSink();
   const memory = new EpisodicMemory(

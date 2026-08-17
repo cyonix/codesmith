@@ -75,3 +75,9 @@ void test("redacts raw PEM private-key blocks", () => {
 
   assert.equal(redacted, "[REDACTED PRIVATE KEY]");
 });
+
+void test("redacts truncated private-key blocks", () => {
+  const redacted = redactSensitiveText("-----BEGIN PRIVATE KEY-----\nprivate key material");
+
+  assert.equal(redacted, "[REDACTED PRIVATE KEY]");
+});
