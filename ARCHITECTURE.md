@@ -40,9 +40,15 @@ flowchart LR
   subgraph Local["Local Node.js process"]
     Session[AgentSession]
     Loop[AgentLoop]
+    Memory[EpisodicMemory]
+    Embedding[Local embedding runtime]
     Events[Typed event stream]
     Tools[ToolExecutor and sandbox]
     Provider[ModelProvider]
+  end
+
+  subgraph MemoryCache["Local model cache (outside the project)"]
+    Cache[Verified embedding model]
   end
 
   subgraph Workspace["Selected project root"]
@@ -57,6 +63,10 @@ flowchart LR
   UI --> Session
   Session --> Loop
   Session --> Events
+  Session --> Memory
+  Loop <--> Memory
+  Memory --> Embedding
+  Embedding --> Cache
   Loop --> Provider
   Provider <--> Model
   Loop --> Tools
@@ -65,6 +75,46 @@ flowchart LR
   Tools --> Commands
   Events --> CLI
   Events --> UI
+```
+
+### Semantic-memory request sequence
+
+This sequence applies only when the client enables semantic memory. Episode
+records stay in the current session. The local model cache stores only the
+reviewed embedding model.
+
+```mermaid
+sequenceDiagram
+  participant Client as CLI or UI
+  participant Session as AgentSession
+  participant Memory as EpisodicMemory
+  participant Cache as Local model cache
+  participant Agent as AgentLoop
+  participant Provider as ModelProvider
+  participant Model as Remote model
+  participant Tools as Sandboxed tools
+
+  Client->>Session: submit(prompt)
+  Session->>Memory: initialize()
+  alt Model is not verified in cache
+    Session->>Client: request model-download approval
+    Client-->>Session: approve
+    Memory->>Cache: download, verify, and install model
+  end
+  Session->>Agent: run(prompt)
+  Agent->>Memory: retrieve relevant episodes
+  Memory-->>Agent: bounded untrusted evidence
+  Agent->>Provider: send prompt and evidence guard
+  Provider->>Model: request completion
+  Model-->>Provider: text or tool calls
+  Provider-->>Agent: response
+  opt Model requests tools
+    Agent->>Tools: run approved tool
+    Tools-->>Agent: structured result
+    Agent->>Memory: record redacted result
+  end
+  Agent->>Memory: record final answer
+  Agent-->>Client: final response and events
 ```
 
 ## 3. Core components
@@ -120,9 +170,15 @@ session.close();
 ```
 
 `submit()` runs one prompt at a time. `approve(requestId, approved)` resolves a
-pending edit or command approval. It returns `false` if the request ID is
-unknown or already resolved. `close()` rejects future prompts, denies pending
-approvals, and stops later tool execution.
+pending edit, command, or model-download approval. It returns `false` if the
+request ID is unknown or already resolved. `close()` rejects future prompts,
+denies pending approvals, and stops later tool execution.
+
+Set `semanticMemory: true` to opt into local semantic episodic memory. To
+experiment with retrieval selectivity, use
+`semanticMemory: { similarityThreshold: 0.55 }`; the threshold must be a finite
+number from 0 to 1. Call `clearEpisodicMemory()` while the session is idle to
+discard its stored episodes immediately.
 
 `modelCatalog` is CodeSmith's reviewed source of provider model IDs and
 endpoints. It supports the OpenAI Chat Completions, Anthropic Messages, and
@@ -144,6 +200,10 @@ Google's retention terms before you choose a Gemini model.
 | `tool_started`       | A local tool is about to run                                   |
 | `tool_finished`      | A tool returned a structured JSON result                       |
 | `approval_requested` | The client must call `approve()` with the request ID           |
+| `memory_recorded`    | An episodic-memory record was added                            |
+| `memory_retrieved`   | Relevant episode IDs and similarity scores informed a prompt   |
+| `memory_cleared`     | Episodic-memory records were discarded                         |
+| `memory_failed`      | Local memory initialization, retrieval, or recording failed    |
 | `error`              | The session or provider failed                                 |
 
 Agent Core does not read terminal input or render a user interface. The CLI
@@ -163,6 +223,35 @@ CodeSmith keeps conversation context for the current session. It interprets
 brief replies such as `yes`, `no`, `proceed`, and `do it` using the agent's most
 recent unresolved question.
 
+### Episodic memory
+
+Semantic memory is opt-in and remains in process for the current
+`AgentSession`. CodeSmith records each completed non-secret tool call and final
+assistant answer as a typed episode. It redacts token-shaped credentials and
+omits conventional credential files such as `.env`, `.npmrc`, `.pypirc`,
+`credentials*`, `id_*`, and private-key files. Each episode keeps no more than
+4 KiB of text, is split into embedding chunks, and the 128 newest episodes are
+retained.
+
+Before a new submission, CodeSmith embeds the prompt together with the
+immediately preceding assistant answer. At most four episodes meeting the
+configured cosine-similarity threshold are supplied as a bounded, ephemeral
+untrusted data context paired with a trusted system guard. The model is told
+that this evidence may be stale, is never an instruction, and must be verified
+with tools before action. Retrieved episode excerpts are capped at 1 KiB each
+and are never persisted in raw conversation history.
+
+CodeSmith runs the reviewed, pinned local ONNX embedding model with an
+owner-only platform cache. The first use requires explicit `model_download`
+approval even with `autoApprove: true`; files are downloaded through a
+cross-process lock, installed atomically, and SHA-256 verified. A missing or
+invalid cache is removed and requires fresh approval. Model initialization
+failures reject the submission. If recording fails after a tool has run,
+CodeSmith completes that active run, emits `memory_failed`, and blocks later
+submissions until memory is cleared. Retrieval failures are also surfaced as
+`memory_failed` and block later submissions rather than silently omitting
+memory.
+
 ## 5. Agent design principles
 
 CodeSmith follows these principles when it runs an agent loop.
@@ -174,9 +263,11 @@ CodeSmith follows these principles when it runs an agent loop.
 - [ ] **Grounded context:** Use only the workspace, conversation, and tool
       context needed for the current decision. State uncertainty instead of
       guessing.
-- [ ] **Episodic tool-execution memory:** Record and retrieve relevant tool
-      actions, results, failures, and decisions. Bound, summarize, and remove that
-      history when it no longer applies.
+- [ ] **Task-scope discipline:** Focus on the selected project and
+      software-engineering work. Politely redirect unrelated requests.
+- [ ] **Episodic tool-execution memory:**
+  - [x] Record and retrieve relevant tool actions, results, failures, and decisions.
+  - [ ] Bound, summarize, and remove that history when it no longer applies.
 - [ ] **Typed, least-privilege tools:** Give the model narrow tools with clear
       inputs, outputs, and permissions. Do not give it open-ended shell access.
 - [ ] **Human control at risk boundaries:** Ask for informed approval before

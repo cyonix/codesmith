@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { createInterface } from "node:readline/promises";
+import { realpathSync } from "node:fs";
 import { stderr, stdin, stdout } from "node:process";
+import { pathToFileURL } from "node:url";
 import { AgentSession } from "../agent/session.js";
 import type { AgentEvent } from "../agent/events.js";
 import { promptForApiKey, selectModel } from "./setup.js";
@@ -35,6 +37,7 @@ async function main(): Promise<void> {
       projectRoot: options.project,
       provider,
       autoApprove: options.yes,
+      ...(options.semanticMemory ? { semanticMemory: true } : {}),
     });
     session = activeSession;
 
@@ -46,6 +49,11 @@ async function main(): Promise<void> {
     while (true) {
       const prompt = await commandReadline.question("\ncodesmith> ");
       if (prompt === "/exit" || prompt === "/quit") break;
+      if (prompt === "/clear-memory") {
+        activeSession.clearEpisodicMemory();
+        stdout.write("\nEpisodic memory cleared.\n");
+        continue;
+      }
       if (!prompt.trim()) continue;
 
       const answer = await activeSession.submit(prompt);
@@ -65,21 +73,36 @@ async function handleEvent(
 ): Promise<void> {
   if (event.type !== "approval_requested") return;
 
+  const label =
+    event.kind === "model_download"
+      ? "Model download"
+      : `${event.kind[0]?.toUpperCase()}${event.kind.slice(1)}`;
   const answer = await readline.question(
-    `\n${event.kind[0].toUpperCase()}${event.kind.slice(1)} approval required:\n${event.summary}\nAllow? [y/N] `,
+    `\n${label} approval required:\n${event.summary}\nAllow? [y/N] `,
   );
   session.approve(event.requestId, answer.trim().toLowerCase() === "y");
 }
 
-function parseOptions(argumentsValue: string[]): { project: string; yes: boolean; help: boolean } {
+export function parseOptions(argumentsValue: string[]): {
+  project: string;
+  yes: boolean;
+  semanticMemory: boolean;
+  help: boolean;
+} {
   let project: string | undefined;
   let yes = false;
+  let semanticMemory = false;
 
   for (let index = 0; index < argumentsValue.length; index += 1) {
     const argument = argumentsValue[index];
-    if (argument === "--help" || argument === "-h") return { project: "", yes: false, help: true };
+    if (argument === "--help" || argument === "-h")
+      return { project: "", yes: false, semanticMemory: false, help: true };
     if (argument === "--yes") {
       yes = true;
+      continue;
+    }
+    if (argument === "--semantic-memory") {
+      semanticMemory = true;
       continue;
     }
     if (argument === "--project") {
@@ -93,15 +116,27 @@ function parseOptions(argumentsValue: string[]): { project: string; yes: boolean
 
   if (!project)
     throw new CodeSmithError("configuration", "--project is required to select a project root.");
-  return { project, yes, help: false };
+  return { project, yes, semanticMemory, help: false };
 }
 
 const help = `codesmith — a local coding agent for Swift, JavaScript, TypeScript, Python, Rust, and Go projects
-Usage: codesmith --project <directory> [--yes]
+Usage: codesmith --project <directory> [--yes] [--semantic-memory]
 Prompts for a model selection and API key at startup.
 All file paths are constrained to --project. Every edit, Git inspection, and detected project command requires confirmation unless --yes is supplied.
-Commands are detected from project manifests and are always executed without a shell.`;
-main().catch((error: unknown) => {
-  stderr.write(`codesmith: ${error instanceof Error ? error.message : "Unexpected failure."}\n`);
-  process.exitCode = 1;
-});
+Commands are detected from project manifests and are always executed without a shell.
+--semantic-memory enables local episodic retrieval and asks for one explicit model-download approval.`;
+if (isEntrypoint(process.argv[1])) {
+  void main().catch((error: unknown) => {
+    stderr.write(`codesmith: ${error instanceof Error ? error.message : "Unexpected failure."}\n`);
+    process.exitCode = 1;
+  });
+}
+
+function isEntrypoint(entryPath: string | undefined): boolean {
+  if (!entryPath) return false;
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(entryPath)).href;
+  } catch {
+    return false;
+  }
+}

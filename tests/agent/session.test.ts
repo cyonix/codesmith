@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { EpisodicMemory } from "../../src/agent/episodic-memory.js";
 import { AgentSession } from "../../src/agent/session.js";
 import type { AgentEvent } from "../../src/agent/events.js";
 import type { AssistantResponse, ChatProvider } from "../../src/shared/types.js";
@@ -67,6 +68,44 @@ void test("session rejects unknown approval IDs", async (context) => {
   });
 
   assert.equal(session.approve("unknown", true), false);
+});
+
+void test("auto-approval still requires explicit model-download approval", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const provider = new MockProvider([{ content: "Completed.", toolCalls: [] }]);
+  const approvals: Array<{ requestId: string; kind: string }> = [];
+  const session = await AgentSession.create(
+    { projectRoot: root, provider, autoApprove: true, semanticMemory: true },
+    {
+      createMemory: (configuration, eventSink) =>
+        new EpisodicMemory(
+          configuration,
+          eventSink,
+          { create: () => Promise.resolve({ embed: () => Promise.resolve([1, 0]) }) },
+          {
+            async install(approval) {
+              if (!(await approval("Download reviewed model."))) throw new Error("declined");
+              return "/fake-model";
+            },
+          },
+        ),
+    },
+  );
+  session.subscribe((event) => {
+    if (event.type === "approval_requested")
+      approvals.push({ requestId: event.requestId, kind: event.kind });
+  });
+
+  const submission = session.submit("Inspect the project.");
+
+  assert.deepEqual(
+    approvals.map((approval) => approval.kind),
+    ["model_download"],
+  );
+  assert.equal(provider.calls, 0);
+  assert.equal(session.approve(approvals[0].requestId, true), true);
+  assert.equal(await submission, "Completed.");
 });
 
 void test("closed sessions reject new prompts", async (context) => {
@@ -134,10 +173,12 @@ void test("closing from tool_started prevents an auto-approved edit", async (con
 
 class MockProvider implements ChatProvider {
   private index = 0;
+  calls = 0;
 
   constructor(private readonly responses: AssistantResponse[]) {}
 
   complete(): Promise<AssistantResponse> {
+    this.calls += 1;
     const response = this.responses[this.index];
     this.index += 1;
     if (!response) throw new Error("Mock provider exhausted.");

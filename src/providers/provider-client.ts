@@ -1,4 +1,5 @@
 import { CodeSmithError } from "../shared/errors.js";
+import { redactSensitiveText } from "../shared/redaction.js";
 import type { AssistantResponse, ChatMessage, ToolDefinition } from "../shared/types.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import { isRecord } from "./provider-parsing.js";
@@ -93,14 +94,12 @@ async function boundedResponseText(response: Response): Promise<string> {
 
 function safeErrorText(value: string, apiKey: string): string {
   const escapedKey = apiKey.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return [...value]
+  const sanitized = [...value]
     .map((character) => {
       const codePoint = character.codePointAt(0)!;
       return codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f) ? " " : character;
     })
     .join("")
-    .replace(new RegExp(escapedKey, "g"), "[REDACTED]")
-    .replace(/\bBearer\s+[^\s"'`,;:}\]]+/gi, "[REDACTED]")
-    .replace(/\bsk-[^\s"'`,;:}\]]+/g, "[REDACTED]")
-    .slice(0, 1_000);
+    .replace(new RegExp(escapedKey, "g"), "[REDACTED]");
+  return redactSensitiveText(sanitized).slice(0, 1_000);
 }
