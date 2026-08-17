@@ -263,9 +263,9 @@ CodeSmith follows these principles when it runs an agent loop.
 - [ ] **Grounded context:** Use only the workspace, conversation, and tool
       context needed for the current decision. State uncertainty instead of
       guessing.
-- [ ] **Episodic tool-execution memory:** Record and retrieve relevant tool
-      actions, results, failures, and decisions. Bound, summarize, and remove that
-      history when it no longer applies.
+- [ ] **Episodic tool-execution memory:**
+  - [x] Record and retrieve relevant tool actions, results, failures, and decisions.
+  - [ ] Bound, summarize, and remove that history when it no longer applies.
 - [ ] **Typed, least-privilege tools:** Give the model narrow tools with clear
       inputs, outputs, and permissions. Do not give it open-ended shell access.
 - [ ] **Human control at risk boundaries:** Ask for informed approval before
