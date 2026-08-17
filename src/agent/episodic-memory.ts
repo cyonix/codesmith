@@ -200,7 +200,11 @@ export class EpisodicMemory {
 
   async recordTool(call: ToolCall, result: string): Promise<void> {
     if (this.disposed || this.secretAccessedInSubmission) return;
-    if (touchesSecretFile(call.function.arguments) || resultReferencesSecretFile(result)) {
+    if (
+      touchesSecretFile(call.function.arguments) ||
+      resultReferencesSecretFile(result) ||
+      resultContainsSensitiveDiff(result)
+    ) {
       this.secretAccessedInSubmission = true;
       return;
     }
@@ -462,7 +466,12 @@ export class ReviewedModelInstaller implements EmbeddingModelInstaller {
       for (const file of reviewedEmbeddingModel.files) {
         const target = path.join(directory, file.path);
         const details = await stat(target);
-        if (!details.isFile() || sha256For(await readFile(target)) !== file.sha256) return false;
+        if (
+          !details.isFile() ||
+          details.size !== file.bytes ||
+          sha256For(await readFile(target)) !== file.sha256
+        )
+          return false;
       }
 
       return true;
@@ -681,6 +690,14 @@ function resultReferencesSecretFile(result: string): boolean {
   }
 }
 
+function resultContainsSensitiveDiff(result: string): boolean {
+  try {
+    return containsSensitiveDiff(JSON.parse(result));
+  } catch {
+    return false;
+  }
+}
+
 function containsSecretPath(value: unknown): boolean {
   if (typeof value === "string") return textReferencesSecretPath(value);
   if (Array.isArray(value)) return value.some((item) => containsSecretPath(item));
@@ -699,6 +716,21 @@ function containsSecretPath(value: unknown): boolean {
       .some((token) => isSecretPath(token));
   }
   return false;
+}
+
+function containsSensitiveDiff(value: unknown): boolean {
+  if (typeof value === "string")
+    return value.split("\n").some((line) => {
+      if (!/^\+(?!\+\+)/.test(line)) return false;
+      return (
+        /(?:api[_-]?key|private[_-]?key|token|secret|password|database[_-]?url)\s*[:=]/i.test(
+          line,
+        ) || /[a-z][a-z0-9+.-]*:\/\/[^/\s:@]+:[^@\s/]+@/i.test(line)
+      );
+    });
+  if (Array.isArray(value)) return value.some((item) => containsSensitiveDiff(item));
+  if (!value || typeof value !== "object") return false;
+  return Object.values(value).some((item) => containsSensitiveDiff(item));
 }
 
 function hasStringPath(value: unknown): value is { path: string } {

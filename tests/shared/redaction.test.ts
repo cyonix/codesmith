@@ -52,6 +52,13 @@ void test("redacts complete unquoted credential values with commas", () => {
   assert.equal(redacted, "[REDACTED]");
 });
 
+void test("redacts credential fields nested in JSON tool results", () => {
+  const redacted = redactSensitiveText(JSON.stringify({ content: '{"api_key":"private-value"}' }));
+
+  assert.doesNotMatch(redacted, /private-value/);
+  assert.deepEqual(JSON.parse(redacted), { content: '{"api_key":"[REDACTED]"}' });
+});
+
 void test("redacts raw PEM private-key blocks", () => {
   const redacted = redactSensitiveText(
     "-----BEGIN RSA PRIVATE KEY-----\nprivate key material\n-----END RSA PRIVATE KEY-----",
