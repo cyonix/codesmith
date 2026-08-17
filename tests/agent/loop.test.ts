@@ -197,6 +197,49 @@ void test("supplies retrieved memory as untrusted data only for the initial tool
     false,
   );
 });
+
+void test("retrieves prior failed tool outcomes and final decisions", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const provider = new MockProvider([
+    {
+      toolCalls: [
+        {
+          id: "missing-file",
+          function: { name: "read_file", arguments: '{"path":"missing.md"}' },
+        },
+      ],
+    },
+    { content: "I decided the missing file should be created.", toolCalls: [] },
+    { content: "I found the earlier outcome.", toolCalls: [] },
+  ]);
+  const memory = new EpisodicMemory(
+    configureSemanticMemory(true),
+    new LoopMemoryEvents(),
+    { create: () => Promise.resolve(new ConstantEmbeddingModel()) },
+    { install: () => Promise.resolve("/fake-model") },
+  );
+  await memory.initialize(() => Promise.resolve(true));
+  const loop = new AgentLoop(
+    provider,
+    await ToolExecutor.create(root, true),
+    12,
+    () => {},
+    () => false,
+    memory,
+  );
+
+  await loop.run("Read missing.md.");
+  await loop.run("What happened, and what did you decide?");
+
+  const retrieved = provider.messages[2]?.find((message) =>
+    message.content?.includes("Retrieved episodic data"),
+  )?.content;
+  assert.match(retrieved ?? "", /Tool: read_file/);
+  assert.match(retrieved ?? "", /"error":/);
+  assert.match(retrieved ?? "", /I decided the missing file should be created/);
+});
+
 class MockProvider implements ChatProvider {
   readonly messages: ChatMessage[][] = [];
   private index = 0;
