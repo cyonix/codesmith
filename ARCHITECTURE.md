@@ -263,6 +263,8 @@ CodeSmith follows these principles when it runs an agent loop.
 - [ ] **Grounded context:** Use only the workspace, conversation, and tool
       context needed for the current decision. State uncertainty instead of
       guessing.
+- [ ] **Task-scope discipline:** Focus on the selected project and
+      software-engineering work. Politely redirect unrelated requests.
 - [ ] **Episodic tool-execution memory:**
   - [x] Record and retrieve relevant tool actions, results, failures, and decisions.
   - [ ] Bound, summarize, and remove that history when it no longer applies.
