@@ -52,8 +52,14 @@ the current process.
 
 The CLI logger writes a short debug line for each turn: status, stated goal,
 tool start or finish, and a redacted preview of each model prompt. The preview
-is bounded. It is not a full prompt dump. Use `--log-level info` to hide those
-turn traces. `CODESMITH_LOG_LEVEL` sets the same level when the flag is omitted.
+is bounded. It is not a full prompt dump. These lines go to a log file, not the
+interactive session. The default file is a new session file in
+`~/Library/Logs/codesmith` on macOS, `$XDG_STATE_HOME/codesmith` (or
+`~/.local/state/codesmith`) on Linux, and `%LOCALAPPDATA%\CodeSmith\Logs` on
+Windows. Use `--log-file <path>` to choose a file. Use `--log-file -` to write
+to stderr. `CODESMITH_LOG_FILE` sets the same path when the flag is omitted.
+Use `--log-level info` to hide those turn traces. `CODESMITH_LOG_LEVEL` sets
+the same level when the flag is omitted.
 
 Use `--yes` only to approve all proposed edits, Git inspections, and allowed
 commands automatically.

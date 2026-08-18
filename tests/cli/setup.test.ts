@@ -31,32 +31,65 @@ void test("renders grouped models and retries invalid numeric selections", async
 
 void test("parses semantic-memory opt-in separately from auto-approval", () => {
   assert.deepEqual(
-    parseOptions(["--project", "/workspace", "--yes", "--semantic-memory"], undefined),
+    parseOptions(["--project", "/workspace", "--yes", "--semantic-memory"], undefined, undefined),
     {
       project: "/workspace",
       yes: true,
       semanticMemory: true,
       help: false,
       logLevel: "debug",
+      logFile: undefined,
     },
   );
-  assert.deepEqual(parseOptions(["--project", "/workspace", "--log-level", "warn"], "error"), {
-    project: "/workspace",
-    yes: false,
-    semanticMemory: false,
-    help: false,
-    logLevel: "warn",
-  });
-  assert.deepEqual(parseOptions(["--project", "/workspace"], "info"), {
+  assert.deepEqual(
+    parseOptions(["--project", "/workspace", "--log-level", "warn"], "error", undefined),
+    {
+      project: "/workspace",
+      yes: false,
+      semanticMemory: false,
+      help: false,
+      logLevel: "warn",
+      logFile: undefined,
+    },
+  );
+  assert.deepEqual(parseOptions(["--project", "/workspace"], "info", undefined), {
     project: "/workspace",
     yes: false,
     semanticMemory: false,
     help: false,
     logLevel: "info",
+    logFile: undefined,
+  });
+  assert.deepEqual(
+    parseOptions(
+      ["--project", "/workspace", "--log-file", "/tmp/codesmith.log"],
+      undefined,
+      "/tmp/env.log",
+    ),
+    {
+      project: "/workspace",
+      yes: false,
+      semanticMemory: false,
+      help: false,
+      logLevel: "debug",
+      logFile: "/tmp/codesmith.log",
+    },
+  );
+  assert.deepEqual(parseOptions(["--project", "/workspace"], undefined, "/tmp/env.log"), {
+    project: "/workspace",
+    yes: false,
+    semanticMemory: false,
+    help: false,
+    logLevel: "debug",
+    logFile: "/tmp/env.log",
   });
   assert.throws(
-    () => parseOptions(["--project", "/workspace", "--log-level", "verbose"]),
+    () => parseOptions(["--project", "/workspace", "--log-level", "verbose"], undefined, undefined),
     /log level/,
+  );
+  assert.throws(
+    () => parseOptions(["--project", "/workspace", "--log-file"], undefined, undefined),
+    /--log-file requires a file path/,
   );
   assert.throws(
     () => parseOptions(["--project", "/workspace", "--semantic-memory-threshold", "0.4"]),
