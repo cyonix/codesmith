@@ -15,6 +15,14 @@ void test("session pauses for approval and emits UI-ready lifecycle events", asy
     {
       toolCalls: [
         {
+          id: "goal-1",
+          function: {
+            name: "state_goal",
+            arguments:
+              '{"summary":"Create HelloWorld.swift.","completion_criteria":["HelloWorld.swift exists."]}',
+          },
+        },
+        {
           id: "create-1",
           function: {
             name: "create_file",
@@ -46,6 +54,10 @@ void test("session pauses for approval and emits UI-ready lifecycle events", asy
       "status",
       "tool_proposed",
       "tool_started",
+      "goal_stated",
+      "tool_finished",
+      "tool_proposed",
+      "tool_started",
       "status",
       "approval_requested",
       "tool_finished",
@@ -56,6 +68,15 @@ void test("session pauses for approval and emits UI-ready lifecycle events", asy
   );
   assert.equal(events.at(-1)?.type, "status");
   assert.deepEqual(events.at(-1), { type: "status", phase: "complete" });
+  assert.deepEqual(
+    events.find((event) => event.type === "goal_stated"),
+    {
+      type: "goal_stated",
+      summary: "Create HelloWorld.swift.",
+      completionCriteria: ["HelloWorld.swift exists."],
+      replaced: false,
+    },
+  );
 });
 
 void test("session rejects unknown approval IDs", async (context) => {
@@ -127,6 +148,14 @@ void test("closing during approval denies the tool and stops the active run", as
   const provider = new MockProvider([
     {
       toolCalls: [
+        {
+          id: "goal-1",
+          function: {
+            name: "state_goal",
+            arguments:
+              '{"summary":"Create HelloWorld.swift.","completion_criteria":["HelloWorld.swift exists."]}',
+          },
+        },
         {
           id: "create-1",
           function: {

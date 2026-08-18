@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
+import type { AgentEvent } from "../../src/agent/events.js";
 import { AgentLoop } from "../../src/agent/loop.js";
 import {
   EpisodicMemory,
@@ -44,6 +45,7 @@ void test("tool loop retains prior prompts and creates the first project file", 
     { content: "What should I name the file?", toolCalls: [] },
     {
       toolCalls: [
+        stateGoalCall(),
         {
           id: "create-1",
           function: {
@@ -83,6 +85,9 @@ void test("tool loop interprets yes as confirmation of the preceding file-remova
     },
     {
       toolCalls: [
+        stateGoalCall("goal-delete", "Remove HelloWorld.swift.", [
+          "HelloWorld.swift no longer exists.",
+        ]),
         {
           id: "delete-1",
           function: { name: "delete_file", arguments: '{"path":"HelloWorld.swift"}' },
@@ -239,6 +244,280 @@ void test("retrieves prior failed tool outcomes and final decisions", async (con
   assert.match(retrieved ?? "", /"error":/);
   assert.match(retrieved ?? "", /I decided the missing file should be created/);
 });
+
+void test("blocks side-effecting tools until state_goal succeeds", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const provider = new MockProvider([
+    {
+      toolCalls: [
+        {
+          id: "create-1",
+          function: {
+            name: "create_file",
+            arguments: '{"path":"HelloWorld.swift","content":"print(\\"Hello, World!\\")\\n"}',
+          },
+        },
+      ],
+    },
+    {
+      toolCalls: [
+        stateGoalCall(),
+        {
+          id: "create-2",
+          function: {
+            name: "create_file",
+            arguments: '{"path":"HelloWorld.swift","content":"print(\\"Hello, World!\\")\\n"}',
+          },
+        },
+      ],
+    },
+    { content: "Created HelloWorld.swift.", toolCalls: [] },
+  ]);
+  const events: AgentEvent[] = [];
+  const result = await new AgentLoop(provider, await ToolExecutor.create(root, true), 12, (event) =>
+    events.push(event),
+  ).run("Create HelloWorld.swift.");
+
+  assert.equal(result, "Created HelloWorld.swift.");
+  assert.equal(
+    await readFile(path.join(root, "HelloWorld.swift"), "utf8"),
+    'print("Hello, World!")\n',
+  );
+  const firstCreate = provider.messages[1]?.find(
+    (message) => message.role === "tool" && message.tool_call_id === "create-1",
+  );
+  assert.match(firstCreate?.content ?? "", /state_goal is required/);
+  assert.equal(
+    events.some((event) => event.type === "goal_stated" && event.replaced === false),
+    true,
+  );
+});
+
+void test("applies state_goal before other tools in the same round", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const provider = new MockProvider([
+    {
+      toolCalls: [
+        {
+          id: "create-1",
+          function: {
+            name: "create_file",
+            arguments: '{"path":"HelloWorld.swift","content":"print(\\"Hello, World!\\")\\n"}',
+          },
+        },
+        stateGoalCall(),
+      ],
+    },
+    { content: "Created HelloWorld.swift.", toolCalls: [] },
+  ]);
+
+  await new AgentLoop(provider, await ToolExecutor.create(root, true)).run(
+    "Create HelloWorld.swift.",
+  );
+
+  assert.equal(
+    await readFile(path.join(root, "HelloWorld.swift"), "utf8"),
+    'print("Hello, World!")\n',
+  );
+});
+
+void test("freezes the goal after a successful file edit", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const provider = new MockProvider([
+    {
+      toolCalls: [
+        stateGoalCall(),
+        {
+          id: "create-1",
+          function: {
+            name: "create_file",
+            arguments: '{"path":"HelloWorld.swift","content":"print(\\"Hello, World!\\")\\n"}',
+          },
+        },
+      ],
+    },
+    {
+      toolCalls: [stateGoalCall("goal-2", "Change the goal.", ["The goal changed."])],
+    },
+    { content: "The goal stayed frozen.", toolCalls: [] },
+  ]);
+
+  await new AgentLoop(provider, await ToolExecutor.create(root, true)).run(
+    "Create HelloWorld.swift.",
+  );
+
+  const frozen = provider.messages
+    .flat()
+    .find((message) => message.role === "tool" && message.tool_call_id === "goal-2");
+  assert.match(frozen?.content ?? "", /frozen after the first file edit/);
+});
+
+void test("does not freeze the goal after run_command", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const provider = new MockProvider([
+    {
+      toolCalls: [
+        stateGoalCall(),
+        { id: "cmd-1", function: { name: "run_command", arguments: '{"command":"npm test"}' } },
+      ],
+    },
+    {
+      toolCalls: [
+        stateGoalCall("goal-2", "Create HelloWorld.swift after the command.", [
+          "HelloWorld.swift exists.",
+        ]),
+      ],
+    },
+    { content: "Replaced the goal.", toolCalls: [] },
+  ]);
+  const events: AgentEvent[] = [];
+
+  await new AgentLoop(provider, await ToolExecutor.create(root, true), 12, (event) =>
+    events.push(event),
+  ).run("Run tests, then set a better goal.");
+
+  assert.deepEqual(
+    events.filter((event) => event.type === "goal_stated").map((event) => event.replaced),
+    [false, true],
+  );
+});
+
+void test("does not freeze the goal when a file edit is declined", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const provider = new MockProvider([
+    {
+      toolCalls: [
+        stateGoalCall(),
+        {
+          id: "create-1",
+          function: {
+            name: "create_file",
+            arguments: '{"path":"HelloWorld.swift","content":"print(\\"Hello, World!\\")\\n"}',
+          },
+        },
+      ],
+    },
+    {
+      toolCalls: [stateGoalCall("goal-2", "Use a different file name.", ["Notes.md exists."])],
+    },
+    { content: "Replaced the goal after a declined edit.", toolCalls: [] },
+  ]);
+  const events: AgentEvent[] = [];
+
+  await new AgentLoop(
+    provider,
+    await ToolExecutor.create(root, false, () => Promise.resolve(false)),
+    12,
+    (event) => events.push(event),
+  ).run("Create HelloWorld.swift.");
+
+  assert.deepEqual(
+    events.filter((event) => event.type === "goal_stated").map((event) => event.replaced),
+    [false, true],
+  );
+  await assert.rejects(() => readFile(path.join(root, "HelloWorld.swift")));
+});
+
+void test("requires a new goal on each submit", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const provider = new MockProvider([
+    {
+      toolCalls: [
+        stateGoalCall(),
+        {
+          id: "create-1",
+          function: {
+            name: "create_file",
+            arguments: '{"path":"HelloWorld.swift","content":"print(\\"Hello, World!\\")\\n"}',
+          },
+        },
+      ],
+    },
+    { content: "Created HelloWorld.swift.", toolCalls: [] },
+    {
+      toolCalls: [
+        {
+          id: "create-2",
+          function: {
+            name: "create_file",
+            arguments: '{"path":"Notes.md","content":"notes\\n"}',
+          },
+        },
+      ],
+    },
+    { content: "The second submit needed a new goal.", toolCalls: [] },
+  ]);
+  const loop = new AgentLoop(provider, await ToolExecutor.create(root, true));
+
+  await loop.run("Create HelloWorld.swift.");
+  await loop.run("Create Notes.md.");
+
+  const secondCreate = provider.messages
+    .flat()
+    .find((message) => message.role === "tool" && message.tool_call_id === "create-2");
+  assert.match(secondCreate?.content ?? "", /state_goal is required/);
+  await assert.rejects(() => readFile(path.join(root, "Notes.md")));
+});
+
+void test("rejects an invalid state_goal payload and leaves gated tools blocked", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const provider = new MockProvider([
+    {
+      toolCalls: [
+        {
+          id: "goal-bad",
+          function: {
+            name: "state_goal",
+            arguments: '{"summary":"Create HelloWorld.swift.","completion_criteria":[]}',
+          },
+        },
+        {
+          id: "create-1",
+          function: {
+            name: "create_file",
+            arguments: '{"path":"HelloWorld.swift","content":"print(\\"Hello, World!\\")\\n"}',
+          },
+        },
+      ],
+    },
+    { content: "No file was created.", toolCalls: [] },
+  ]);
+
+  await new AgentLoop(provider, await ToolExecutor.create(root, true)).run(
+    "Create HelloWorld.swift.",
+  );
+
+  const goalResult = provider.messages[1]?.find(
+    (message) => message.role === "tool" && message.tool_call_id === "goal-bad",
+  );
+  const createResult = provider.messages[1]?.find(
+    (message) => message.role === "tool" && message.tool_call_id === "create-1",
+  );
+  assert.match(goalResult?.content ?? "", /completion_criteria must contain 1 to 8/);
+  assert.match(createResult?.content ?? "", /state_goal is required/);
+  await assert.rejects(() => readFile(path.join(root, "HelloWorld.swift")));
+});
+
+function stateGoalCall(
+  id = "goal-1",
+  summary = "Create HelloWorld.swift.",
+  completionCriteria: string[] = ["HelloWorld.swift exists."],
+) {
+  return {
+    id,
+    function: {
+      name: "state_goal",
+      arguments: JSON.stringify({ summary, completion_criteria: completionCriteria }),
+    },
+  };
+}
 
 class MockProvider implements ChatProvider {
   readonly messages: ChatMessage[][] = [];

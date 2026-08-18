@@ -8,6 +8,12 @@ export type AgentEvent =
   | { type: "tool_started"; call: ToolCall }
   | { type: "tool_finished"; call: ToolCall; result: string }
   | { type: "approval_requested"; requestId: string; kind: ApprovalKind; summary: string }
+  | {
+      type: "goal_stated";
+      summary: string;
+      completionCriteria: readonly string[];
+      replaced: boolean;
+    }
   | { type: "memory_recorded"; episodeId: string; kind: "tool" | "assistant" }
   | {
       type: "memory_retrieved";
