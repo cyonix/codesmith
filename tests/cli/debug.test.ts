@@ -3,7 +3,7 @@ import test from "node:test";
 import { formatDebugEvent } from "../../src/cli/debug.js";
 
 void test("formats turn debug lines for status, goal, and tools", () => {
-  assert.equal(formatDebugEvent({ type: "status", phase: "thinking" }), "thinking");
+  assert.equal(formatDebugEvent({ type: "status", phase: "thinking" }), "[status] thinking");
   assert.equal(
     formatDebugEvent({
       type: "goal_stated",
@@ -11,7 +11,7 @@ void test("formats turn debug lines for status, goal, and tools", () => {
       completionCriteria: ["HelloWorld.swift exists."],
       replaced: false,
     }),
-    "goal Create HelloWorld.swift. replaced=false tests=1",
+    "[goal] Create HelloWorld.swift. replaced=false tests=1",
   );
   assert.equal(
     formatDebugEvent({
@@ -21,7 +21,7 @@ void test("formats turn debug lines for status, goal, and tools", () => {
         function: { name: "create_file", arguments: '{"path":"HelloWorld.swift"}' },
       },
     }),
-    'start create_file {"path":"HelloWorld.swift"}',
+    '[tool] [start] create_file {"path":"HelloWorld.swift"}',
   );
   assert.equal(
     formatDebugEvent({
@@ -32,7 +32,7 @@ void test("formats turn debug lines for status, goal, and tools", () => {
       },
       result: '{"status":"created","path":"HelloWorld.swift"}',
     }),
-    'done create_file {"status":"created","path":"HelloWorld.swift"}',
+    '[tool] [done] create_file {"status":"created","path":"HelloWorld.swift"}',
   );
   assert.equal(
     formatDebugEvent({
@@ -45,9 +45,9 @@ void test("formats turn debug lines for status, goal, and tools", () => {
       ],
     }),
     [
-      "llm round=0 messages=2 tools=10",
-      "llm system You are CodeSmith.",
-      "llm user Create HelloWorld.swift.",
+      "[llm] round=0 messages=2 tools=10",
+      "[llm] [system] You are CodeSmith.",
+      "[llm] [user] Create HelloWorld.swift.",
     ].join("\n"),
   );
 });
@@ -58,7 +58,7 @@ void test("redacts credentials and skips noisy events", () => {
       type: "error",
       message: "provider failed Bearer tok_secret",
     }),
-    "error provider failed [REDACTED]",
+    "[error] provider failed [REDACTED]",
   );
   assert.equal(
     formatDebugEvent({
