@@ -50,6 +50,9 @@ CodeSmith shows a numbered list of models when it starts. Select a model
 number. Then enter its API key in the hidden prompt. The key exists only for
 the current process.
 
+The CLI writes a short debug line to stderr for each turn: status, stated
+goal, and tool start or finish.
+
 Use `--yes` only to approve all proposed edits, Git inspections, and allowed
 commands automatically.
 

@@ -5,6 +5,7 @@ import { stderr, stdin, stdout } from "node:process";
 import { pathToFileURL } from "node:url";
 import { AgentSession } from "../agent/session.js";
 import type { AgentEvent } from "../agent/events.js";
+import { formatDebugEvent } from "./debug.js";
 import { promptForApiKey, selectModel } from "./setup.js";
 import { CodeSmithError } from "../shared/errors.js";
 import { ModelProvider } from "../providers/provider.js";
@@ -42,6 +43,8 @@ async function main(): Promise<void> {
     session = activeSession;
 
     activeSession.subscribe((event) => {
+      const line = formatDebugEvent(event);
+      if (line) stderr.write(`${line}\n`);
       void handleEvent(event, activeSession, commandReadline);
     });
     stdout.write(`CodeSmith is ready for ${options.project}. Type /exit to quit.\n`);
