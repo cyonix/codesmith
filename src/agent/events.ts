@@ -26,6 +26,15 @@ export type AgentEvent =
       message: string;
       blocksFutureSubmissions: boolean;
     }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string }
+  | {
+      type: "provider_request";
+      round: number;
+      toolCount: number;
+      messages: ReadonlyArray<{
+        role: "system" | "user" | "assistant" | "tool";
+        preview: string;
+      }>;
+    };
 
 export type AgentEventListener = (event: AgentEvent) => void;

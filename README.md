@@ -51,7 +51,8 @@ number. Then enter its API key in the hidden prompt. The key exists only for
 the current process.
 
 The CLI writes a short debug line to stderr for each turn: status, stated
-goal, and tool start or finish.
+goal, tool start or finish, and a redacted preview of each model prompt. The
+preview is bounded. It is not a full prompt dump.
 
 Use `--yes` only to approve all proposed edits, Git inspections, and allowed
 commands automatically.

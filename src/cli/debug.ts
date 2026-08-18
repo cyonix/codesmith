@@ -1,31 +1,28 @@
 import type { AgentEvent } from "../agent/events.js";
-import { redactSensitiveText } from "../shared/redaction.js";
-
-const maximumPreviewCharacters = 200;
+import { previewSensitiveText } from "../shared/redaction.js";
 
 export function formatDebugEvent(event: AgentEvent): string | undefined {
   switch (event.type) {
     case "status":
       return `debug: ${event.phase}`;
     case "goal_stated":
-      return `debug: goal ${preview(event.summary)} replaced=${event.replaced} tests=${event.completionCriteria.length}`;
+      return `debug: goal ${previewSensitiveText(event.summary)} replaced=${event.replaced} tests=${event.completionCriteria.length}`;
     case "tool_started":
-      return `debug: start ${event.call.function.name} ${preview(event.call.function.arguments)}`;
+      return `debug: start ${event.call.function.name} ${previewSensitiveText(event.call.function.arguments)}`;
     case "tool_finished":
-      return `debug: done ${event.call.function.name} ${preview(event.result)}`;
+      return `debug: done ${event.call.function.name} ${previewSensitiveText(event.result)}`;
+    case "provider_request":
+      return [
+        `debug: llm round=${event.round} messages=${event.messages.length} tools=${event.toolCount}`,
+        ...event.messages.map((message) => `debug: llm ${message.role} ${message.preview}`),
+      ].join("\n");
     case "memory_retrieved":
       return `debug: memory retrieved ${event.episodes.length}`;
     case "memory_failed":
-      return `debug: memory failed ${event.phase} ${preview(event.message)}`;
+      return `debug: memory failed ${event.phase} ${previewSensitiveText(event.message)}`;
     case "error":
-      return `debug: error ${preview(event.message)}`;
+      return `debug: error ${previewSensitiveText(event.message)}`;
     default:
       return undefined;
   }
-}
-
-function preview(text: string): string {
-  const compact = redactSensitiveText(text).replace(/\s+/g, " ").trim();
-  if (compact.length <= maximumPreviewCharacters) return compact;
-  return `${compact.slice(0, maximumPreviewCharacters - 3)}...`;
 }

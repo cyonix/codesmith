@@ -1,4 +1,5 @@
 import { CodeSmithError } from "../shared/errors.js";
+import { previewSensitiveText } from "../shared/redaction.js";
 import type { AgentEvent } from "./events.js";
 import { EpisodicMemory } from "./episodic-memory.js";
 import {
@@ -54,10 +55,12 @@ export class AgentLoop {
       this.emit({ type: "status", phase: "thinking" });
       this.assertOpen();
 
-      const response = await this.provider.complete(
-        this.messagesForProvider(memoryContext, toolRounds === 0),
-        [stateGoalDefinition, ...this.tools.definitions],
-      );
+      const providerTools = [stateGoalDefinition, ...this.tools.definitions];
+      const providerMessages = this.messagesForProvider(memoryContext, toolRounds === 0);
+      this.emit(providerRequestEvent(toolRounds, providerMessages, providerTools.length));
+      this.assertOpen();
+
+      const response = await this.provider.complete(providerMessages, providerTools);
       this.assertOpen();
 
       if (response.toolCalls.length > 0 && toolRounds >= this.maximumToolRounds) {
@@ -198,6 +201,29 @@ export class AgentLoop {
   private assertOpen(): void {
     if (this.isClosed()) throw new CodeSmithError("loop", "This agent session is closed.");
   }
+}
+
+function providerRequestEvent(
+  round: number,
+  messages: readonly ChatMessage[],
+  toolCount: number,
+): AgentEvent {
+  return {
+    type: "provider_request",
+    round,
+    toolCount,
+    messages: messages.map((message) => ({
+      role: message.role,
+      preview: providerMessagePreview(message),
+    })),
+  };
+}
+
+function providerMessagePreview(message: ChatMessage): string {
+  if (message.content) return previewSensitiveText(message.content);
+  const names = message.tool_calls?.map((call) => call.function.name) ?? [];
+  if (names.length > 0) return previewSensitiveText(`tool_calls ${names.join(", ")}`);
+  return "";
 }
 
 function orderToolCalls(calls: readonly ToolCall[]): ToolCall[] {

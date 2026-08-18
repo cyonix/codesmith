@@ -52,6 +52,7 @@ void test("session pauses for approval and emits UI-ready lifecycle events", asy
     events.map((event) => event.type),
     [
       "status",
+      "provider_request",
       "tool_proposed",
       "tool_started",
       "goal_stated",
@@ -62,12 +63,24 @@ void test("session pauses for approval and emits UI-ready lifecycle events", asy
       "approval_requested",
       "tool_finished",
       "status",
+      "provider_request",
       "assistant_text",
       "status",
     ],
   );
   assert.equal(events.at(-1)?.type, "status");
   assert.deepEqual(events.at(-1), { type: "status", phase: "complete" });
+  const providerRequest = events.find((event) => event.type === "provider_request");
+  assert.equal(providerRequest?.type, "provider_request");
+  if (providerRequest?.type === "provider_request") {
+    assert.equal(providerRequest.round, 0);
+    assert.ok(providerRequest.messages.some((message) => message.role === "user"));
+    assert.ok(
+      providerRequest.messages.some((message) =>
+        message.preview.includes("Create HelloWorld.swift."),
+      ),
+    );
+  }
   assert.deepEqual(
     events.find((event) => event.type === "goal_stated"),
     {

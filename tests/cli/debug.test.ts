@@ -34,6 +34,22 @@ void test("formats turn debug lines for status, goal, and tools", () => {
     }),
     'debug: done create_file {"status":"created","path":"HelloWorld.swift"}',
   );
+  assert.equal(
+    formatDebugEvent({
+      type: "provider_request",
+      round: 0,
+      toolCount: 10,
+      messages: [
+        { role: "system", preview: "You are CodeSmith." },
+        { role: "user", preview: "Create HelloWorld.swift." },
+      ],
+    }),
+    [
+      "debug: llm round=0 messages=2 tools=10",
+      "debug: llm system You are CodeSmith.",
+      "debug: llm user Create HelloWorld.swift.",
+    ].join("\n"),
+  );
 });
 
 void test("redacts credentials and skips noisy events", () => {

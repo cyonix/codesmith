@@ -206,6 +206,7 @@ Google's retention terms before you choose a Gemini model.
 | `memory_cleared`     | Episodic-memory records were discarded                         |
 | `memory_failed`      | Local memory initialization, retrieval, or recording failed    |
 | `error`              | The session or provider failed                                 |
+| `provider_request`   | A redacted preview of the messages sent to the model           |
 
 Agent Core does not read terminal input or render a user interface. The CLI
 uses `readline` for approval requests. A GUI can show the same events as chat
