@@ -73,4 +73,36 @@ void test("redacts credentials and skips noisy events", () => {
     formatDebugEvent({ type: "assistant_text", text: "Created HelloWorld.swift." }),
     undefined,
   );
+  assert.equal(
+    formatDebugEvent({
+      type: "tool_started",
+      call: {
+        id: "read-env",
+        function: { name: "read_file", arguments: '{"path":".env"}' },
+      },
+    }),
+    "[tool] [start] read_file [omitted secret file]",
+  );
+  assert.equal(
+    formatDebugEvent({
+      type: "tool_finished",
+      call: {
+        id: "read-env",
+        function: { name: "read_file", arguments: '{"path":".env"}' },
+      },
+      result: '{"content":"FOO=opaque-value"}',
+    }),
+    "[tool] [done] read_file [omitted secret file]",
+  );
+  assert.equal(
+    formatDebugEvent({
+      type: "tool_finished",
+      call: {
+        id: "read-netrc",
+        function: { name: "read_file", arguments: '{"path":".netrc"}' },
+      },
+      result: '{"content":"machine example.com login user password opaque-value"}',
+    }),
+    "[tool] [done] read_file [omitted secret file]",
+  );
 });

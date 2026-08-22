@@ -1,5 +1,6 @@
 import { CodeSmithError } from "../shared/errors.js";
 import { previewSensitiveText } from "../shared/redaction.js";
+import { isSensitiveToolPayload, omittedSecretPreview } from "../shared/secret-files.js";
 import type { AgentEvent } from "./events.js";
 import { EpisodicMemory } from "./episodic-memory.js";
 import {
@@ -214,16 +215,34 @@ function providerRequestEvent(
     toolCount,
     messages: messages.map((message) => ({
       role: message.role,
-      preview: providerMessagePreview(message),
+      preview: providerMessagePreview(message, messages),
     })),
   };
 }
 
-function providerMessagePreview(message: ChatMessage): string {
+function providerMessagePreview(message: ChatMessage, messages: readonly ChatMessage[]): string {
+  if (message.role === "tool") {
+    const call = findToolCall(messages, message.tool_call_id);
+    if (!call || isSensitiveToolPayload(call.function.arguments, message.content ?? ""))
+      return omittedSecretPreview;
+    return previewSensitiveText(message.content ?? "");
+  }
   if (message.content) return previewSensitiveText(message.content);
   const names = message.tool_calls?.map((call) => call.function.name) ?? [];
   if (names.length > 0) return previewSensitiveText(`tool_calls ${names.join(", ")}`);
   return "";
+}
+
+function findToolCall(
+  messages: readonly ChatMessage[],
+  toolCallId: string | undefined,
+): ToolCall | undefined {
+  if (!toolCallId) return undefined;
+  for (const message of messages) {
+    const match = message.tool_calls?.find((call) => call.id === toolCallId);
+    if (match) return match;
+  }
+  return undefined;
 }
 
 function orderToolCalls(calls: readonly ToolCall[]): ToolCall[] {

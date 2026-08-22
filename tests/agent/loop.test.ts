@@ -505,6 +505,34 @@ void test("rejects an invalid state_goal payload and leaves gated tools blocked"
   await assert.rejects(() => readFile(path.join(root, "HelloWorld.swift")));
 });
 
+void test("omits secret-file tool content from later provider request previews", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  await writeFile(path.join(root, ".env"), "FOO=opaque-value\n");
+  const events: AgentEvent[] = [];
+  const provider = new MockProvider([
+    {
+      toolCalls: [{ id: "read-1", function: { name: "read_file", arguments: '{"path":".env"}' } }],
+    },
+    { content: "I cannot show that file.", toolCalls: [] },
+  ]);
+
+  await new AgentLoop(provider, await ToolExecutor.create(root, true), 12, (event) =>
+    events.push(event),
+  ).run("Read the env file.");
+
+  const secondRequest = events.filter((event) => event.type === "provider_request").at(1);
+  assert.equal(secondRequest?.type, "provider_request");
+  if (secondRequest?.type === "provider_request") {
+    const toolPreview = secondRequest.messages.find((message) => message.role === "tool");
+    assert.equal(toolPreview?.preview, "[omitted secret file]");
+    assert.equal(
+      secondRequest.messages.some((message) => message.preview.includes("opaque-value")),
+      false,
+    );
+  }
+});
+
 function stateGoalCall(
   id = "goal-1",
   summary = "Create HelloWorld.swift.",

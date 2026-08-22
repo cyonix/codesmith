@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, chmodSync, closeSync, fchmodSync, mkdirSync, openSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { stderr } from "node:process";
@@ -89,11 +89,19 @@ export function resolveLogFilePath(
 export function createFileLogWriter(
   filePath: string,
   report: (message: string) => void = (message) => stderr.write(`${message}\n`),
+  options: { ownedDirectory?: string } = {},
 ): (line: string) => void {
   const directory = path.dirname(filePath);
+  const ownedDirectory = options.ownedDirectory ?? defaultLogDirectory();
   try {
     mkdirSync(directory, { recursive: true, mode: 0o700 });
-    appendFileSync(filePath, "", { mode: 0o600 });
+    secureOwnedDirectory(directory, ownedDirectory);
+    const fd = openSync(filePath, "a", 0o600);
+    try {
+      secureLogFile(fd);
+    } finally {
+      closeSync(fd);
+    }
   } catch (error) {
     throw new CodeSmithError(
       "configuration",
@@ -128,6 +136,29 @@ export function createLogger(options: LoggerOptions = {}): Logger {
     warn: (message) => log("warn", message),
     error: (message) => log("error", message),
   };
+}
+
+function isOwnedLogDirectory(directory: string, ownedDirectory: string): boolean {
+  const resolved = path.resolve(directory);
+  const owned = path.resolve(ownedDirectory);
+  return resolved === owned || resolved.startsWith(`${owned}${path.sep}`);
+}
+
+function secureOwnedDirectory(directory: string, ownedDirectory: string): void {
+  if (!isOwnedLogDirectory(directory, ownedDirectory)) return;
+  try {
+    chmodSync(directory, 0o700);
+  } catch (error) {
+    if (process.platform !== "win32") throw error;
+  }
+}
+
+function secureLogFile(fd: number): void {
+  try {
+    fchmodSync(fd, 0o600);
+  } catch (error) {
+    if (process.platform !== "win32") throw error;
+  }
 }
 
 function isLogLevel(value: string): value is LogLevel {

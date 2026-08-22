@@ -1,5 +1,6 @@
 import type { AgentEvent } from "../agent/events.js";
 import { previewSensitiveText } from "../shared/redaction.js";
+import { isSensitiveToolPayload, omittedSecretPreview } from "../shared/secret-files.js";
 
 export function formatDebugEvent(event: AgentEvent): string | undefined {
   switch (event.type) {
@@ -8,9 +9,9 @@ export function formatDebugEvent(event: AgentEvent): string | undefined {
     case "goal_stated":
       return `[goal] ${previewSensitiveText(event.summary)} replaced=${event.replaced} tests=${event.completionCriteria.length}`;
     case "tool_started":
-      return `[tool] [start] ${event.call.function.name} ${previewSensitiveText(event.call.function.arguments)}`;
+      return `[tool] [start] ${event.call.function.name} ${toolPreview(event.call.function.arguments)}`;
     case "tool_finished":
-      return `[tool] [done] ${event.call.function.name} ${previewSensitiveText(event.result)}`;
+      return `[tool] [done] ${event.call.function.name} ${toolPreview(event.call.function.arguments, event.result)}`;
     case "provider_request":
       return [
         `[llm] round=${event.round} messages=${event.messages.length} tools=${event.toolCount}`,
@@ -25,4 +26,9 @@ export function formatDebugEvent(event: AgentEvent): string | undefined {
     default:
       return undefined;
   }
+}
+
+function toolPreview(argumentsValue: string, result?: string): string {
+  if (isSensitiveToolPayload(argumentsValue, result)) return omittedSecretPreview;
+  return previewSensitiveText(result ?? argumentsValue);
 }

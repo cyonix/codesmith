@@ -1,5 +1,13 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -91,4 +99,32 @@ void test("keeps later log writes from throwing after a file write fails", () =>
   assert.doesNotThrow(() => write("debug [status] waiting"));
   assert.equal(reports.length, 1);
   assert.match(reports[0] ?? "", /Could not write to the log file/);
+});
+
+void test("tightens an existing log file and owned directory permissions", () => {
+  const owned = mkdtempSync(path.join(os.tmpdir(), "codesmith-log-"));
+  chmodSync(owned, 0o755);
+  const filePath = path.join(owned, "session.log");
+  writeFileSync(filePath, "", { mode: 0o644 });
+  chmodSync(filePath, 0o644);
+
+  createFileLogWriter(filePath, () => {}, { ownedDirectory: owned });
+
+  if (process.platform !== "win32") {
+    assert.equal(statSync(filePath).mode & 0o777, 0o600);
+    assert.equal(statSync(owned).mode & 0o777, 0o700);
+  }
+});
+
+void test("does not chmod a custom parent directory", () => {
+  const parent = mkdtempSync(path.join(os.tmpdir(), "codesmith-custom-log-"));
+  chmodSync(parent, 0o755);
+  const filePath = path.join(parent, "custom.log");
+
+  createFileLogWriter(filePath, () => {}, { ownedDirectory: path.join(parent, "not-owned") });
+
+  if (process.platform !== "win32") {
+    assert.equal(statSync(parent).mode & 0o777, 0o755);
+    assert.equal(statSync(filePath).mode & 0o777, 0o600);
+  }
 });
