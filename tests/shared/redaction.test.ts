@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { redactSensitiveText } from "../../src/shared/redaction.js";
+import { previewSensitiveText, redactSensitiveText } from "../../src/shared/redaction.js";
 
 void test("redacts credentials in conventional environment-variable identifiers", () => {
   const redacted = redactSensitiveText(
@@ -74,6 +74,15 @@ void test("redacts raw PEM private-key blocks", () => {
   );
 
   assert.equal(redacted, "[REDACTED PRIVATE KEY]");
+});
+
+void test("keeps the full redacted text without cutting it short", () => {
+  const prompt = `You are CodeSmith, a local coding assistant. ${"Work only through the supplied tools. ".repeat(20)}`;
+  const preview = previewSensitiveText(prompt);
+
+  assert.match(preview, /supplied tools/);
+  assert.doesNotMatch(preview, /\.\.\.$/);
+  assert.ok(preview.length > 200);
 });
 
 void test("redacts truncated private-key blocks", () => {

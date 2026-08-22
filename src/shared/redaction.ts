@@ -36,8 +36,6 @@ export function redactSensitiveText(value: string): string {
     );
 }
 
-export function previewSensitiveText(value: string, maximumCharacters = 200): string {
-  const compact = redactSensitiveText(value).replace(/\s+/g, " ").trim();
-  if (compact.length <= maximumCharacters) return compact;
-  return `${compact.slice(0, maximumCharacters - 3)}...`;
+export function previewSensitiveText(value: string): string {
+  return redactSensitiveText(value).replace(/\s+/g, " ").trim();
 }
