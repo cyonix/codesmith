@@ -50,6 +50,17 @@ CodeSmith shows a numbered list of models when it starts. Select a model
 number. Then enter its API key in the hidden prompt. The key exists only for
 the current process.
 
+The CLI logger writes a debug line for each turn: status, stated goal,
+tool start or finish, and a redacted copy of each model prompt. Credentials
+are redacted. Secret-file payloads are omitted. The text is not cut short.
+These lines go to a log file, not the interactive session. The default file is a new session file in
+`~/Library/Logs/codesmith` on macOS, `$XDG_STATE_HOME/codesmith` (or
+`~/.local/state/codesmith`) on Linux, and `%LOCALAPPDATA%\CodeSmith\Logs` on
+Windows. Use `--log-file <path>` to choose a file. Use `--log-file -` to write
+to stderr. `CODESMITH_LOG_FILE` sets the same path when the flag is omitted.
+Use `--log-level info` to hide those turn traces. `CODESMITH_LOG_LEVEL` sets
+the same level when the flag is omitted.
+
 Use `--yes` only to approve all proposed edits, Git inspections, and allowed
 commands automatically.
 

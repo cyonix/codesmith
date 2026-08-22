@@ -35,3 +35,7 @@ export function redactSensitiveText(value: string): string {
       "$1[REDACTED]",
     );
 }
+
+export function previewSensitiveText(value: string): string {
+  return redactSensitiveText(value).replace(/\s+/g, " ").trim();
+}

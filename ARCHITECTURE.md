@@ -200,11 +200,13 @@ Google's retention terms before you choose a Gemini model.
 | `tool_started`       | A local tool is about to run                                   |
 | `tool_finished`      | A tool returned a structured JSON result                       |
 | `approval_requested` | The client must call `approve()` with the request ID           |
+| `goal_stated`        | The agent recorded a goal and completion tests for this submit |
 | `memory_recorded`    | An episodic-memory record was added                            |
 | `memory_retrieved`   | Relevant episode IDs and similarity scores informed a prompt   |
 | `memory_cleared`     | Episodic-memory records were discarded                         |
 | `memory_failed`      | Local memory initialization, retrieval, or recording failed    |
 | `error`              | The session or provider failed                                 |
+| `provider_request`   | A redacted preview of the messages sent to the model           |
 
 Agent Core does not read terminal input or render a user interface. The CLI
 uses `readline` for approval requests. A GUI can show the same events as chat
@@ -216,12 +218,25 @@ messages, timelines, diff previews, and approval dialogs.
 2. The core sends limited conversation history and tool definitions to the
    provider.
 3. The model returns text or tool calls.
-4. The sandboxed executor runs approved tool calls on the local machine.
-5. The tool results return to the model until it gives a final response.
+4. Before `create_file`, `delete_file`, `apply_patch`, or `run_command`, the
+   model must call `state_goal` with a summary and observable completion tests.
+5. The sandboxed executor runs approved tool calls on the local machine.
+6. The tool results return to the model until it gives a final response.
 
 CodeSmith keeps conversation context for the current session. It interprets
 brief replies such as `yes`, `no`, `proceed`, and `do it` using the agent's most
 recent unresolved question.
+
+### Goals and completion criteria
+
+Each submission starts with no goal. Before `create_file`, `delete_file`,
+`apply_patch`, or `run_command`, the model must call `state_goal` with a short
+summary and one to eight observable completion tests. Read-only tools can run
+first. The model may replace the goal until the first successful file edit.
+`run_command` does not freeze the goal. A declined or failed edit does not
+freeze the goal. The loop stores the goal. It does not check the tests. Clients
+receive a `goal_stated` event. In one assistant round, the loop applies
+`state_goal` before the other tools.
 
 ### Episodic memory
 
@@ -256,7 +271,7 @@ memory.
 
 CodeSmith follows these principles when it runs an agent loop.
 
-- [ ] **Clear goals and completion criteria:** State the goal and how to tell
+- [x] **Clear goals and completion criteria:** State the goal and how to tell
       when the work is complete before acting.
 - [ ] **Plan before side effects:** Make a clear plan that can change, then
       take the smallest useful next action.
@@ -377,7 +392,7 @@ staged files.
 | Repository          | `cyonix/codesmith`                                             |
 | Runtime             | Node.js 22+ and TypeScript                                     |
 | Architecture status | Experimental learning project; not intended for production use |
-| Last updated        | 2026-08-15                                                     |
+| Last updated        | 2026-08-17                                                     |
 
 ## 11. Glossary
 
