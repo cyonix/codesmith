@@ -1,4 +1,12 @@
-import { appendFileSync, chmodSync, closeSync, fchmodSync, mkdirSync, openSync } from "node:fs";
+import {
+  appendFileSync,
+  chmodSync,
+  closeSync,
+  constants,
+  fchmodSync,
+  mkdirSync,
+  openSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { stderr } from "node:process";
@@ -96,11 +104,26 @@ export function createFileLogWriter(
   try {
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     secureOwnedDirectory(directory, ownedDirectory);
-    const fd = openSync(filePath, "a", 0o600);
+    const fd = openSync(
+      filePath,
+      constants.O_WRONLY | constants.O_CREAT | constants.O_APPEND | (constants.O_NOFOLLOW ?? 0),
+      0o600,
+    );
     try {
       secureLogFile(fd);
-    } finally {
+      let writable = true;
+      return (line: string) => {
+        if (!writable) return;
+        try {
+          appendFileSync(fd, `${line}\n`);
+        } catch (error) {
+          writable = false;
+          report(`codesmith: Could not write to the log file ${filePath}. ${errorMessage(error)}`);
+        }
+      };
+    } catch (error) {
       closeSync(fd);
+      throw error;
     }
   } catch (error) {
     throw new CodeSmithError(
@@ -108,17 +131,6 @@ export function createFileLogWriter(
       `Could not create the log file ${filePath}. ${errorMessage(error)}`,
     );
   }
-
-  let writable = true;
-  return (line: string) => {
-    if (!writable) return;
-    try {
-      appendFileSync(filePath, `${line}\n`, { mode: 0o600 });
-    } catch (error) {
-      writable = false;
-      report(`codesmith: Could not write to the log file ${filePath}. ${errorMessage(error)}`);
-    }
-  };
 }
 
 export function createLogger(options: LoggerOptions = {}): Logger {

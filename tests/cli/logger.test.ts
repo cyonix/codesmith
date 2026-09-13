@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import {
   chmodSync,
-  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import os from "node:os";
@@ -87,18 +87,18 @@ void test("appends logger lines to a file", () => {
   );
 });
 
-void test("keeps later log writes from throwing after a file write fails", () => {
+void test("keeps writes bound to the secured log file after path replacement", () => {
   const directory = mkdtempSync(path.join(os.tmpdir(), "codesmith-log-"));
   const filePath = path.join(directory, "session.log");
-  const reports: string[] = [];
-  const write = createFileLogWriter(filePath, (message) => reports.push(message));
+  const targetPath = path.join(directory, "target.log");
+  writeFileSync(targetPath, "target contents\n");
+  const write = createFileLogWriter(filePath);
+  write("debug [status] thinking");
   rmSync(filePath);
-  mkdirSync(filePath);
+  symlinkSync(targetPath, filePath);
 
-  assert.doesNotThrow(() => write("debug [status] thinking"));
   assert.doesNotThrow(() => write("debug [status] waiting"));
-  assert.equal(reports.length, 1);
-  assert.match(reports[0] ?? "", /Could not write to the log file/);
+  assert.equal(readFileSync(targetPath, "utf8"), "target contents\n");
 });
 
 void test("tightens an existing log file and owned directory permissions", () => {

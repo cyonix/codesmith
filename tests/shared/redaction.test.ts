@@ -59,6 +59,15 @@ void test("redacts credential fields nested in JSON tool results", () => {
   assert.deepEqual(JSON.parse(redacted), { content: '{"api_key":"[REDACTED]"}' });
 });
 
+void test("redacts credentials in natural-language previews", () => {
+  const preview = previewSensitiveText(
+    'use password hunter2 and my API key is "private-value"; the token equals abc.def-123',
+  );
+
+  assert.equal(preview, "use password [REDACTED] and my API key [REDACTED]; the token [REDACTED]");
+  assert.doesNotMatch(preview, /hunter2|private-value|abc\.def-123/);
+});
+
 void test("redacts URL-userinfo credentials in tool results", () => {
   const redacted = redactSensitiveText(
     JSON.stringify({ content: "DATABASE_URL=postgres://user:password@host/db" }),
