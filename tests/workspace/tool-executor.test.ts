@@ -42,6 +42,40 @@ void test("creates a root file after approval", async (context) => {
     'print("Hello, World!")\n',
   );
 });
+void test("accepts edit fragments through 10000 characters", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const content = "a".repeat(10_000);
+  const tools = await ToolExecutor.create(root, true);
+
+  const created = await tools.execute(call("create_file", { path: "large.txt", content }));
+  await writeFile(path.join(root, "source.txt"), "target");
+  const patched = await tools.execute(
+    call("apply_patch", { path: "source.txt", expected_content: "target", replacement: content }),
+  );
+
+  assert.deepEqual(JSON.parse(created), { status: "created", path: "large.txt" });
+  assert.deepEqual(JSON.parse(patched), { status: "applied", path: "source.txt" });
+  assert.equal(await readFile(path.join(root, "large.txt"), "utf8"), content);
+  assert.equal(await readFile(path.join(root, "source.txt"), "utf8"), content);
+});
+void test("rejects edit fragments over 10000 characters", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const tooLarge = "a".repeat(10_001);
+  const tools = await ToolExecutor.create(root, true);
+  await writeFile(path.join(root, "source.txt"), "target");
+
+  const created = await tools.execute(
+    call("create_file", { path: "too-large.txt", content: tooLarge }),
+  );
+  const patched = await tools.execute(
+    call("apply_patch", { path: "source.txt", expected_content: "target", replacement: tooLarge }),
+  );
+
+  assert.match(resultError(created), /at most 10000 characters/);
+  assert.match(resultError(patched), /at most 10000 characters/);
+});
 void test("deletes a root file after approval", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
   context.after(async () => rm(root, { recursive: true, force: true }));
@@ -258,6 +292,26 @@ void test("escapes C1 and bidirectional terminal controls in patch approval text
 
   assert.match(approvalSummary, /\\u009b2J\\u202e2/);
   assert.doesNotMatch(approvalSummary, /[\u009b\u202e]/);
+});
+void test("truncates large edit approval previews while keeping both ends", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  await writeFile(path.join(root, "source.swift"), "target");
+  const replacement = `start-${"a".repeat(300)}-middle-${"b".repeat(300)}-end`;
+  let approvalSummary = "";
+  const tools = await ToolExecutor.create(root, false, (request) => {
+    approvalSummary = request.summary;
+    return Promise.resolve(false);
+  });
+
+  await tools.execute(
+    call("apply_patch", { path: "source.swift", expected_content: "target", replacement }),
+  );
+
+  assert.match(approvalSummary, /start-/);
+  assert.match(approvalSummary, /-end"/);
+  assert.match(approvalSummary, /\[118 characters omitted\]/);
+  assert.doesNotMatch(approvalSummary, /middle/);
 });
 void test("escapes terminal controls in patch target paths", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));

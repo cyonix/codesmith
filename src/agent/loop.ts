@@ -36,7 +36,6 @@ export class AgentLoop {
 
   async run(prompt: string): Promise<string> {
     this.goals.reset();
-    this.trimHistory();
     const priorAssistantText = this.priorAssistantText();
     const memoryContext = this.memory
       ? await this.memory.retrieve(
@@ -47,12 +46,16 @@ export class AgentLoop {
       : undefined;
     this.memory?.startSubmission();
     this.messages.push({ role: "user", content: prompt });
+    let submissionStart = this.messages.length - 1;
 
     let toolCallsUsed = 0;
     let toolRounds = 0;
 
     while (true) {
       this.assertOpen();
+      const providerResponseReserve = memoryContext && toolRounds === 0 ? 3 : 1;
+      submissionStart = this.makeRoomFor(providerResponseReserve, submissionStart);
+      this.assertHistoryCapacity(providerResponseReserve);
       this.emit({ type: "status", phase: "thinking" });
       this.assertOpen();
 
@@ -72,16 +75,15 @@ export class AgentLoop {
       }
 
       toolCallsUsed += response.toolCalls.length;
-      if (
-        toolCallsUsed > AgentLoop.maximumToolCallsPerRun ||
-        this.messages.length + 1 + response.toolCalls.length > AgentLoop.maximumHistoryMessages
-      ) {
+      if (toolCallsUsed > AgentLoop.maximumToolCallsPerRun) {
         throw new CodeSmithError(
           "loop",
           "The agent exceeded the maximum number of tool calls for one request.",
         );
       }
 
+      submissionStart = this.makeRoomFor(1 + response.toolCalls.length, submissionStart);
+      this.assertHistoryCapacity(1 + response.toolCalls.length);
       this.messages.push({
         role: "assistant",
         content: response.content,
@@ -186,17 +188,24 @@ export class AgentLoop {
     return undefined;
   }
 
-  private trimHistory(): void {
-    const maximumPriorMessages =
-      AgentLoop.maximumHistoryMessages - AgentLoop.maximumToolCallsPerRun * 2 - 2;
-
-    while (this.messages.length > maximumPriorMessages) {
+  private makeRoomFor(requiredMessages: number, submissionStart: number): number {
+    while (
+      this.messages.length + requiredMessages > AgentLoop.maximumHistoryMessages &&
+      submissionStart > 1
+    ) {
       const nextUser = this.messages.findIndex(
         (message, index) => index > 1 && message.role === "user",
       );
-      if (nextUser < 0) this.messages.splice(1);
-      else this.messages.splice(1, nextUser - 1);
+      if (nextUser < 0) break;
+      this.messages.splice(1, nextUser - 1);
+      submissionStart -= nextUser - 1;
     }
+    return submissionStart;
+  }
+
+  private assertHistoryCapacity(requiredMessages: number): void {
+    if (this.messages.length + requiredMessages > AgentLoop.maximumHistoryMessages)
+      throw new CodeSmithError("loop", "The agent exceeded the maximum conversation history.");
   }
 
   private assertOpen(): void {

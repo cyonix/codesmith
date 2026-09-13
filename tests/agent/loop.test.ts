@@ -73,6 +73,51 @@ void test("tool loop retains prior prompts and creates the first project file", 
     ),
   );
 });
+
+void test("retains completed turns across normal submissions", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const provider = new MockProvider(
+    Array.from({ length: 5 }, (_, index) => ({
+      content: `Response ${index}.`,
+      toolCalls: [],
+    })),
+  );
+  const loop = new AgentLoop(provider, await ToolExecutor.create(root, true));
+
+  for (let index = 0; index < 5; index += 1) await loop.run(`Prompt ${index}.`);
+
+  const finalRequest = provider.messages[4] ?? [];
+  assert.ok(finalRequest.some((message) => message.content === "Prompt 0."));
+  assert.ok(finalRequest.some((message) => message.content === "Response 0."));
+  assert.ok(finalRequest.some((message) => message.content === "Prompt 4."));
+});
+
+void test("removes the oldest completed turn only when the history needs room", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const provider = new MockProvider(
+    Array.from({ length: 16 }, (_, index) => ({
+      content: `Response ${index}.`,
+      toolCalls: [],
+    })),
+  );
+  const loop = new AgentLoop(provider, await ToolExecutor.create(root, true));
+
+  for (let index = 0; index < 16; index += 1) await loop.run(`Prompt ${index}.`);
+
+  const requestBeforeCapacity = provider.messages[14] ?? [];
+  assert.ok(requestBeforeCapacity.some((message) => message.content === "Prompt 0."));
+  const requestAtCapacity = provider.messages[15] ?? [];
+  assert.equal(
+    requestAtCapacity.some((message) => message.content === "Prompt 0."),
+    false,
+  );
+  assert.ok(requestAtCapacity.some((message) => message.content === "Prompt 1."));
+  assert.ok(requestAtCapacity.some((message) => message.content === "Response 14."));
+  assert.ok(requestAtCapacity.some((message) => message.content === "Prompt 15."));
+});
+
 void test("tool loop interprets yes as confirmation of the preceding file-removal question", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
   context.after(async () => rm(root, { recursive: true, force: true }));
@@ -140,6 +185,10 @@ void test("tool loop reserves context for a full tool run after prior turns", as
   const result = await loop.run("Inspect the project.");
 
   assert.equal(result, "Completed all tool calls.");
+  assert.ok(
+    provider.messages.every((messages) => messages.length <= 32),
+    "Each provider request must stay within the conversation-history capacity.",
+  );
 });
 void test("does not accept a provider completion rejected by tool-call limits", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
@@ -200,6 +249,39 @@ void test("supplies retrieved memory as untrusted data only for the initial tool
   assert.equal(
     provider.messages[1]?.some((message) => message.content?.includes("Retrieved episodic data")),
     false,
+  );
+});
+
+void test("keeps retrieved memory within the conversation-history capacity after retries", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const provider = new RetryingProvider(30);
+  const memory = new EpisodicMemory(
+    configureSemanticMemory(true),
+    new LoopMemoryEvents(),
+    { create: () => Promise.resolve(new ConstantEmbeddingModel()) },
+    { install: () => Promise.resolve("/fake-model") },
+  );
+  await memory.initialize(() => Promise.resolve(true));
+  await memory.recordAssistant("Historical memory");
+  const loop = new AgentLoop(
+    provider,
+    await ToolExecutor.create(root, true),
+    12,
+    () => {},
+    () => false,
+    memory,
+  );
+
+  for (let index = 0; index < 30; index += 1)
+    await assert.rejects(() => loop.run(`Retry ${index}.`), /temporary provider failure/);
+  assert.equal(await loop.run("Recover."), "Recovered.");
+
+  assert.ok(provider.messages.every((messages) => messages.length <= 32));
+  assert.ok(
+    provider.messages
+      .at(-1)
+      ?.some((message) => message.content?.includes("Retrieved episodic data")),
   );
 });
 
@@ -561,6 +643,20 @@ class MockProvider implements ChatProvider {
 
   acceptCompletion(): void {
     this.acceptedCompletions += 1;
+  }
+}
+
+class RetryingProvider implements ChatProvider {
+  readonly messages: ChatMessage[][] = [];
+  private calls = 0;
+
+  constructor(private readonly failedCalls: number) {}
+
+  complete(messages: ChatMessage[]): Promise<AssistantResponse> {
+    this.messages.push([...messages]);
+    if (this.calls++ < this.failedCalls)
+      return Promise.reject(new Error("temporary provider failure"));
+    return Promise.resolve({ content: "Recovered.", toolCalls: [] });
   }
 }
 

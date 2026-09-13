@@ -26,7 +26,8 @@ import type { JsonValue, ToolCall, ToolDefinition } from "../shared/types.js";
 
 const MAXIMUM_TEXT_BYTES = 10_000_000;
 const MAXIMUM_COMMAND_OUTPUT_BYTES = 20_000;
-const MAXIMUM_PATCH_FRAGMENT_CHARACTERS = 500;
+const MAXIMUM_EDIT_FRAGMENT_CHARACTERS = 10_000;
+const MAXIMUM_APPROVAL_PREVIEW_CHARACTERS = 500;
 
 const trustedCommandDirectories = [
   "/usr/bin",
@@ -181,12 +182,12 @@ export class ToolExecutor {
     assertRootFilePath(requestedPath, "create_file");
 
     if (
-      content.length > MAXIMUM_PATCH_FRAGMENT_CHARACTERS ||
+      content.length > MAXIMUM_EDIT_FRAGMENT_CHARACTERS ||
       Buffer.byteLength(content, "utf8") > MAXIMUM_TEXT_BYTES
     ) {
       throw new SwiftCoderAIError(
         "arguments",
-        "New-file content must be at most 500 characters and 1 MB.",
+        "New-file content must be at most 10000 characters and 1 MB.",
       );
     }
 
@@ -282,12 +283,12 @@ export class ToolExecutor {
     const replacement = requiredString(argumentsValue.replacement, "replacement");
 
     if (
-      expected.length > MAXIMUM_PATCH_FRAGMENT_CHARACTERS ||
-      replacement.length > MAXIMUM_PATCH_FRAGMENT_CHARACTERS
+      expected.length > MAXIMUM_EDIT_FRAGMENT_CHARACTERS ||
+      replacement.length > MAXIMUM_EDIT_FRAGMENT_CHARACTERS
     )
       throw new SwiftCoderAIError(
         "arguments",
-        "Patch fragments must be at most 500 characters so the full change can be approved.",
+        "Patch fragments must be at most 10000 characters so the full change can be approved.",
       );
 
     const filePath = this.permitted(await this.sandbox.resolve(requestedPath));
@@ -738,7 +739,17 @@ export function hardenedGitArguments(argumentsValue: string[]): string[] {
 }
 
 function safePreview(value: string): string {
-  const escaped = [...value]
+  const characters = [...value];
+  if (characters.length <= MAXIMUM_APPROVAL_PREVIEW_CHARACTERS)
+    return `"${escapePreview(characters)}"`;
+
+  const headLength = Math.floor(MAXIMUM_APPROVAL_PREVIEW_CHARACTERS / 2);
+  const omittedCharacters = characters.length - MAXIMUM_APPROVAL_PREVIEW_CHARACTERS;
+  return `"${escapePreview(characters.slice(0, headLength))}... [${omittedCharacters} characters omitted] ...${escapePreview(characters.slice(headLength - MAXIMUM_APPROVAL_PREVIEW_CHARACTERS))}"`;
+}
+
+function escapePreview(characters: readonly string[]): string {
+  return characters
     .map((character) => {
       const codePoint = character.codePointAt(0)!;
       if (
@@ -754,8 +765,6 @@ function safePreview(value: string): string {
       return character;
     })
     .join("");
-
-  return `"${escaped}"`;
 }
 
 async function validateOpenedTarget(

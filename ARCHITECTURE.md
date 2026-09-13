@@ -223,9 +223,12 @@ messages, timelines, diff previews, and approval dialogs.
 5. The sandboxed executor runs approved tool calls on the local machine.
 6. The tool results return to the model until it gives a final response.
 
-CodeSmith keeps conversation context for the current session. It interprets
-brief replies such as `yes`, `no`, `proceed`, and `do it` using the agent's most
-recent unresolved question.
+CodeSmith keeps up to 32 messages of conversation context for the current
+session. It removes the oldest complete submission only when the active
+submission needs room for a model response or tool result. This is a
+message-count limit, not a token-size limit. It interprets brief replies such
+as `yes`, `no`, `proceed`, and `do it` using the agent's most recent unresolved
+question.
 
 ### Goals and completion criteria
 
@@ -356,9 +359,10 @@ servers; review Google's retention terms before selecting a Gemini model.
 - It blocks `.git` internals, including Git worktree pointer files.
 - It creates and deletes files only at the project root. Create directories
   yourself before asking CodeSmith to edit a nested file.
-- Patch fragments can contain at most 500 characters. New-file content can
-  contain at most 500 characters and 1 MB. Edit previews escape terminal
-  control characters.
+- Patch fragments can contain at most 10000 characters. New-file content can
+  contain at most 10000 characters and 1 MB. Edit previews escape terminal
+  control characters and show the beginning and end of text longer than 500
+  characters.
 - Commands run without a shell and with a fixed, non-secret `PATH`.
 - Commands and Git inspection use a minimal subprocess environment. Git diff
   disables external diff and text-conversion helpers.
