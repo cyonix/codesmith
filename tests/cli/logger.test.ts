@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {
   chmodSync,
+  constants,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -8,6 +9,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { CodeSmithError } from "../../src/shared/errors.js";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -154,3 +156,43 @@ void test("does not chmod a parent directory outside the owned log directory", (
     assert.equal(statSync(filePath).mode & 0o777, 0o600);
   }
 });
+
+void test("fails closed when the log file cannot be created", () => {
+  const parent = mkdtempSync(path.join(os.tmpdir(), "codesmith-log-"));
+  const blocker = path.join(parent, "not-a-directory");
+  writeFileSync(blocker, "file");
+  const filePath = path.join(blocker, "session.log");
+
+  assert.throws(
+    () => createFileLogWriter(filePath),
+    (error: unknown) => {
+      assert.ok(error instanceof CodeSmithError);
+      assert.equal(error.kind, "configuration");
+      assert.match(error.message, /Could not create the log file/);
+      return true;
+    },
+  );
+});
+
+void test(
+  "rejects a log path that is a symlink",
+  { skip: process.platform === "win32" || constants.O_NOFOLLOW === undefined },
+  () => {
+    const directory = mkdtempSync(path.join(os.tmpdir(), "codesmith-log-"));
+    const targetPath = path.join(directory, "target.log");
+    const filePath = path.join(directory, "session.log");
+    writeFileSync(targetPath, "target contents\n");
+    symlinkSync(targetPath, filePath);
+
+    assert.throws(
+      () => createFileLogWriter(filePath),
+      (error: unknown) => {
+        assert.ok(error instanceof CodeSmithError);
+        assert.equal(error.kind, "configuration");
+        assert.match(error.message, /Could not create the log file/);
+        return true;
+      },
+    );
+    assert.equal(readFileSync(targetPath, "utf8"), "target contents\n");
+  },
+);
