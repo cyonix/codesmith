@@ -18,6 +18,7 @@ export class AgentLoop {
   private static readonly maximumToolCallsPerRun = 12;
   private readonly goals = new GoalState();
   private secretAccessedInSubmission = false;
+  private readonly taintedAssistantMessages = new WeakSet<ChatMessage>();
   private readonly messages: ChatMessage[] = [
     {
       role: "system",
@@ -68,7 +69,8 @@ export class AgentLoop {
           toolRounds,
           providerMessages,
           providerTools.length,
-          this.secretAccessedInSubmission,
+          this.secretAccessedInSubmission ||
+            providerMessages.some((message) => this.taintedAssistantMessages.has(message)),
         ),
       );
       this.assertOpen();
@@ -93,11 +95,13 @@ export class AgentLoop {
 
       submissionStart = this.makeRoomFor(1 + response.toolCalls.length, submissionStart);
       this.assertHistoryCapacity(1 + response.toolCalls.length);
-      this.messages.push({
+      const assistantMessage: ChatMessage = {
         role: "assistant",
         content: response.content,
         tool_calls: response.toolCalls,
-      });
+      };
+      this.messages.push(assistantMessage);
+      if (this.secretAccessedInSubmission) this.taintedAssistantMessages.add(assistantMessage);
       this.provider.acceptCompletion?.();
 
       if (response.toolCalls.length === 0) {

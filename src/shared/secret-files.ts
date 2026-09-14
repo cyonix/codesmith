@@ -77,6 +77,8 @@ function isSecretToolPath(value: unknown): boolean {
 }
 
 function hasValidPathToolArguments(toolName: string, value: unknown): boolean {
+  if (toolName === "run_command") return false;
+
   switch (toolName) {
     case "list_files":
       return hasExactStringFields(value, [], ["path"]);
@@ -92,8 +94,6 @@ function hasValidPathToolArguments(toolName: string, value: unknown): boolean {
     case "git_status":
     case "git_diff":
       return hasExactStringFields(value, []);
-    case "run_command":
-      return hasExactStringFields(value, ["command"]);
     case "state_goal":
       return hasValidStateGoalArguments(value);
     default:

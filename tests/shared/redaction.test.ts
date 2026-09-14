@@ -71,6 +71,13 @@ void test("redacts credentials in natural-language previews", () => {
   assert.doesNotMatch(preview, /hunter2|private-value|other-private-value|abc\.def-123/);
 });
 
+void test("redacts complete unquoted prose credential values", () => {
+  const redacted = redactSensitiveText("password is correct horse battery staple");
+
+  assert.equal(redacted, "password [REDACTED]");
+  assert.doesNotMatch(redacted, /correct|horse|battery|staple/);
+});
+
 void test("redacts values after multi-word credential labels", () => {
   const redacted = redactSensitiveText(
     'private key is private-value, secret key was: secret-value, secret access key equals "access-secret", and access key: access-value',

@@ -659,6 +659,35 @@ void test("taints later tool and provider previews after secret access", async (
   );
 });
 
+void test("omits previews in a later submission after an assistant receives a secret", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  await writeFile(path.join(root, ".env"), "FOO=opaque-value\n");
+  const events: AgentEvent[] = [];
+  const provider = new MockProvider([
+    {
+      toolCalls: [
+        { id: "read-env", function: { name: "read_file", arguments: '{"path":".env"}' } },
+      ],
+    },
+    { content: "I found FOO=opaque-value.", toolCalls: [] },
+    { content: "I will make no changes.", toolCalls: [] },
+  ]);
+  const loop = new AgentLoop(provider, await ToolExecutor.create(root, true), 12, (event) =>
+    events.push(event),
+  );
+
+  await loop.run("Find the environment value.");
+  await loop.run("What should I do next?");
+
+  const laterSubmissionRequest = events.filter((event) => event.type === "provider_request").at(-1);
+  assert.equal(laterSubmissionRequest?.type, "provider_request");
+  if (laterSubmissionRequest?.type === "provider_request") {
+    assert.equal(laterSubmissionRequest.secretTainted, true);
+    assert.ok(laterSubmissionRequest.messages.every((message) => message.preview === ""));
+  }
+});
+
 void test("matches reused tool call IDs to their preceding call when previewing results", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
   context.after(async () => rm(root, { recursive: true, force: true }));

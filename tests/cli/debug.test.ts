@@ -128,6 +128,16 @@ void test("redacts credentials and skips noisy events", () => {
     formatDebugEvent({
       type: "tool_started",
       call: {
+        id: "disallowed-command",
+        function: { name: "run_command", arguments: '{"command":"curl https://example.test"}' },
+      },
+    }),
+    "[tool] [start] run_command [omitted secret file]",
+  );
+  assert.equal(
+    formatDebugEvent({
+      type: "tool_started",
+      call: {
         id: "read-env",
         function: { name: "read_file", arguments: '{"path":".env"}' },
       },

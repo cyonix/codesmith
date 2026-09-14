@@ -14,13 +14,19 @@ void test("accepts only exact schemas for known tool payloads", () => {
     ["apply_patch", { path: "note.txt", expected_content: "old", replacement: "new" }],
     ["git_status", {}],
     ["git_diff", {}],
-    ["run_command", { command: "npm test" }],
     ["state_goal", { summary: "Run tests", completion_criteria: ["The test suite passes"] }],
   ];
 
   for (const [toolName, argumentsValue] of validPayloads) {
     assert.equal(touchesSecretFile(toolName, JSON.stringify(argumentsValue)), false, toolName);
   }
+});
+
+void test("omits every run_command payload before command-policy rejection", () => {
+  assert.equal(
+    touchesSecretFile("run_command", JSON.stringify({ command: "curl https://example.test" })),
+    true,
+  );
 });
 
 void test("treats unknown and schema-invalid tool payloads as sensitive", () => {
