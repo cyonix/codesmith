@@ -6,6 +6,7 @@ import {
   fchmodSync,
   mkdirSync,
   openSync,
+  realpathSync,
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -31,24 +32,40 @@ export interface FileLogWriter {
   close: () => void;
 }
 
-export function defaultLogDirectory(
-  platform = process.platform,
-  environment: NodeJS.ProcessEnv = process.env,
-  home = os.homedir(),
-): string {
-  if (platform === "darwin") return path.join(home, "Library", "Logs", "codesmith");
-  if (platform === "win32")
-    return path.join(
-      environment.LOCALAPPDATA ?? path.join(home, "AppData", "Local"),
-      "CodeSmith",
-      "Logs",
+export function assertFileLoggingSupported(platform = process.platform): void {
+  if (platform !== "darwin") {
+    throw new CodeSmithError("configuration", "File logs are supported on macOS only.");
+  }
+}
+
+export function defaultLogDirectory(platform = process.platform, home = os.homedir()): string {
+  assertFileLoggingSupported(platform);
+  return path.join(home, "Library", "Logs", "codesmith");
+}
+
+export function assertLogFileOutsideProject(logFile: string, projectRoot: string): void {
+  const resolvedLog = resolveExisting(logFile);
+  const resolvedProject = resolveExisting(projectRoot);
+  if (isInsideDirectory(resolvedProject, resolvedLog)) {
+    throw new CodeSmithError(
+      "configuration",
+      `Could not create the log file ${escapeLogLine(logFile)}. The log path is inside --project.`,
     );
-  const xdgStateHome = environment.XDG_STATE_HOME;
-  const stateHome =
-    xdgStateHome && path.isAbsolute(xdgStateHome)
-      ? xdgStateHome
-      : path.join(home, ".local", "state");
-  return path.join(stateHome, "codesmith");
+  }
+}
+
+export function logFileOpenFlags(
+  fsConstants: {
+    O_WRONLY: number;
+    O_CREAT: number;
+    O_APPEND: number;
+    O_NOFOLLOW?: number;
+  } = constants,
+): number {
+  if (typeof fsConstants.O_NOFOLLOW !== "number") {
+    throw new Error("O_NOFOLLOW is not available.");
+  }
+  return fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_APPEND | fsConstants.O_NOFOLLOW;
 }
 
 export function defaultLogFilePath(options: LogPathOptions = {}): string {
@@ -71,15 +88,11 @@ export function createFileLogWriter(
   } = {},
 ): FileLogWriter {
   const directory = path.dirname(filePath);
-  const ownedDirectory = options.ownedDirectory ?? defaultLogDirectory();
   try {
     mkdirSync(directory, { recursive: true, mode: 0o700 });
-    secureOwnedDirectory(directory, ownedDirectory);
-    const fd = openSync(
-      filePath,
-      constants.O_WRONLY | constants.O_CREAT | constants.O_APPEND | (constants.O_NOFOLLOW ?? 0),
-      0o600,
-    );
+    if (options.ownedDirectory !== undefined)
+      secureOwnedDirectory(directory, options.ownedDirectory);
+    const fd = openSync(filePath, logFileOpenFlags(), 0o600);
     try {
       secureLogFile(fd);
       let writable = true;
@@ -114,9 +127,10 @@ export function createFileLogWriter(
       throw error;
     }
   } catch (error) {
+    if (error instanceof CodeSmithError) throw error;
     throw new CodeSmithError(
       "configuration",
-      `Could not create the log file ${filePath}. ${errorMessage(error)}`,
+      `Could not create the log file ${escapeLogLine(filePath)}. ${escapeLogLine(errorMessage(error))}`,
     );
   }
 }
@@ -131,27 +145,41 @@ export function createLogger(options: LoggerOptions = {}): Logger {
   };
 }
 
+function resolveExisting(target: string): string {
+  const resolved = path.resolve(target);
+  let current = resolved;
+  while (true) {
+    try {
+      const canonical = realpathSync(current);
+      if (current === resolved) return canonical;
+      return path.join(canonical, path.relative(current, resolved));
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) return resolved;
+      current = parent;
+    }
+  }
+}
+
+function isInsideDirectory(directory: string, candidate: string): boolean {
+  const relative = path.relative(path.resolve(directory), path.resolve(candidate));
+  return (
+    relative === "" ||
+    (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative))
+  );
+}
+
 function isOwnedLogDirectory(directory: string, ownedDirectory: string): boolean {
-  const resolved = path.resolve(directory);
-  const owned = path.resolve(ownedDirectory);
-  return resolved === owned || resolved.startsWith(`${owned}${path.sep}`);
+  return isInsideDirectory(ownedDirectory, directory);
 }
 
 function secureOwnedDirectory(directory: string, ownedDirectory: string): void {
   if (!isOwnedLogDirectory(directory, ownedDirectory)) return;
-  try {
-    chmodSync(directory, 0o700);
-  } catch (error) {
-    if (process.platform !== "win32") throw error;
-  }
+  chmodSync(directory, 0o700);
 }
 
 function secureLogFile(fd: number): void {
-  try {
-    fchmodSync(fd, 0o600);
-  } catch (error) {
-    if (process.platform !== "win32") throw error;
-  }
+  fchmodSync(fd, 0o600);
 }
 
 function escapeLogLine(line: string): string {

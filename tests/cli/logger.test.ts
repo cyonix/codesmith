@@ -14,10 +14,13 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
+  assertFileLoggingSupported,
+  assertLogFileOutsideProject,
   createFileLogWriter,
   createLogger,
   defaultLogDirectory,
   defaultLogFilePath,
+  logFileOpenFlags,
 } from "../../src/cli/logger.js";
 
 void test("writes debug lines and escapes terminal controls", () => {
@@ -35,22 +38,64 @@ void test("writes debug lines and escapes terminal controls", () => {
   assert.doesNotMatch(lines[0] ?? "", new RegExp(`[${String.fromCodePoint(0x1b, 0x9b, 0x202e)}]`));
 });
 
-void test("selects a platform log directory outside the project", () => {
+void test("selects the macOS log directory outside the project", () => {
   assert.equal(
-    defaultLogDirectory("darwin", {}, "/Users/dev"),
+    defaultLogDirectory("darwin", "/Users/dev"),
     path.join("/Users/dev", "Library", "Logs", "codesmith"),
   );
-  assert.equal(
-    defaultLogDirectory("linux", { XDG_STATE_HOME: "/var/state" }, "/home/dev"),
-    path.join("/var/state", "codesmith"),
+});
+
+void test("refuses file logging on platforms other than macOS", () => {
+  for (const platform of ["linux", "win32"] as const) {
+    assert.throws(
+      () => assertFileLoggingSupported(platform),
+      (error: unknown) => {
+        assert.ok(error instanceof CodeSmithError);
+        assert.equal(error.kind, "configuration");
+        assert.match(error.message, /macOS only/);
+        return true;
+      },
+    );
+    assert.throws(
+      () => defaultLogDirectory(platform, "/home/dev"),
+      (error: unknown) => {
+        assert.ok(error instanceof CodeSmithError);
+        assert.equal(error.kind, "configuration");
+        assert.match(error.message, /macOS only/);
+        return true;
+      },
+    );
+  }
+  assert.doesNotThrow(() => assertFileLoggingSupported("darwin"));
+});
+
+void test("refuses a log path inside the selected project", () => {
+  const project = mkdtempSync(path.join(os.tmpdir(), "codesmith-project-"));
+  const inside = path.join(project, "Library", "Logs", "codesmith", "session.log");
+  const outside = path.join(os.tmpdir(), "codesmith-outside-logs", "session.log");
+
+  assert.throws(
+    () => assertLogFileOutsideProject(inside, project),
+    (error: unknown) => {
+      assert.ok(error instanceof CodeSmithError);
+      assert.equal(error.kind, "configuration");
+      assert.match(error.message, /inside --project/);
+      return true;
+    },
   );
-  assert.equal(
-    defaultLogDirectory("linux", { XDG_STATE_HOME: "relative" }, "/home/dev"),
-    path.join("/home/dev", ".local", "state", "codesmith"),
-  );
-  assert.equal(
-    defaultLogDirectory("win32", { LOCALAPPDATA: "C:\\Data" }, "C:\\Users\\dev"),
-    path.join("C:\\Data", "CodeSmith", "Logs"),
+  assert.doesNotThrow(() => assertLogFileOutsideProject(outside, project));
+  assert.throws(
+    () =>
+      assertLogFileOutsideProject(
+        path.join("/Users/dev", "Library", "Logs", "codesmith", "session.log"),
+        "/",
+      ),
+    (error: unknown) => {
+      assert.ok(error instanceof CodeSmithError);
+      assert.equal(error.kind, "configuration");
+      assert.match(error.message, /inside --project/);
+      return true;
+    },
   );
 });
 
@@ -161,7 +206,43 @@ void test("fails closed when the log file cannot be created", () => {
   const parent = mkdtempSync(path.join(os.tmpdir(), "codesmith-log-"));
   const blocker = path.join(parent, "not-a-directory");
   writeFileSync(blocker, "file");
-  const filePath = path.join(blocker, "session.log");
+  const filePath = path.join(blocker, "session\u001b[2J.log");
+
+  assert.throws(
+    () => createFileLogWriter(filePath),
+    (error: unknown) => {
+      assert.ok(error instanceof CodeSmithError);
+      assert.equal(error.kind, "configuration");
+      assert.match(error.message, /Could not create the log file/);
+      assert.match(error.message, /session\\u001b\[2J\.log/);
+      assert.doesNotMatch(error.message, new RegExp(String.fromCodePoint(0x1b)));
+      return true;
+    },
+  );
+});
+
+void test("fails closed when O_NOFOLLOW is not available", () => {
+  assert.throws(
+    () =>
+      logFileOpenFlags({
+        O_WRONLY: constants.O_WRONLY,
+        O_CREAT: constants.O_CREAT,
+        O_APPEND: constants.O_APPEND,
+      }),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /O_NOFOLLOW is not available/);
+      return true;
+    },
+  );
+});
+
+void test("rejects a log path that is a symlink", { skip: process.platform === "win32" }, () => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), "codesmith-log-"));
+  const targetPath = path.join(directory, "target.log");
+  const filePath = path.join(directory, "session.log");
+  writeFileSync(targetPath, "target contents\n");
+  symlinkSync(targetPath, filePath);
 
   assert.throws(
     () => createFileLogWriter(filePath),
@@ -172,27 +253,5 @@ void test("fails closed when the log file cannot be created", () => {
       return true;
     },
   );
+  assert.equal(readFileSync(targetPath, "utf8"), "target contents\n");
 });
-
-void test(
-  "rejects a log path that is a symlink",
-  { skip: process.platform === "win32" || constants.O_NOFOLLOW === undefined },
-  () => {
-    const directory = mkdtempSync(path.join(os.tmpdir(), "codesmith-log-"));
-    const targetPath = path.join(directory, "target.log");
-    const filePath = path.join(directory, "session.log");
-    writeFileSync(targetPath, "target contents\n");
-    symlinkSync(targetPath, filePath);
-
-    assert.throws(
-      () => createFileLogWriter(filePath),
-      (error: unknown) => {
-        assert.ok(error instanceof CodeSmithError);
-        assert.equal(error.kind, "configuration");
-        assert.match(error.message, /Could not create the log file/);
-        return true;
-      },
-    );
-    assert.equal(readFileSync(targetPath, "utf8"), "target contents\n");
-  },
-);

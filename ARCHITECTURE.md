@@ -357,13 +357,14 @@ servers; review Google's retention terms before selecting a Gemini model.
   groups.
 - Provider credentials stay in the provider client. Provider error diagnostics
   are limited and redact configured and token-shaped credentials.
-- The CLI writes one debug log file for each session outside `--project`. The
-  directory mode is `0700` and the file mode is `0600`. The logger keeps one
-  append descriptor and closes it when the session ends. A create failure
-  stops startup. A later write failure is reported once to stderr, and the
-  session continues. CodeSmith does not delete old log files. Log lines are
-  sanitized tagged text. They include redacted event text and omit secret-file
-  tool payloads.
+- The CLI writes one debug log file for each session outside `--project` on
+  macOS only. Other platforms stop at startup. Startup also fails if the log
+  path is inside `--project`. The directory mode is `0700` and the file mode is
+  `0600`. The logger keeps one append descriptor and closes it when the session
+  ends. A create failure stops startup. A later write failure is reported once
+  to stderr, and the session continues. CodeSmith does not delete old log
+  files. Log lines are sanitized tagged text. They include redacted event text
+  and omit secret-file tool payloads. Approval events log the kind only.
 
 ## 9. Development and testing
 

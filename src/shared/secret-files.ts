@@ -124,8 +124,12 @@ function hasExactStringFields(
   if (!isRecord(value)) return false;
   const allowed = new Set([...required, ...optional]);
   if (!Object.keys(value).every((field) => allowed.has(field))) return false;
-  if (!required.every((field) => typeof value[field] === "string")) return false;
-  return optional.every((field) => value[field] === undefined || typeof value[field] === "string");
+  if (!required.every((field) => isNonEmptyString(value[field]))) return false;
+  return optional.every((field) => value[field] === undefined || isNonEmptyString(value[field]));
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
 }
 
 function isSecretPath(value: string): boolean {

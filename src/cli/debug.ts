@@ -15,7 +15,7 @@ export function formatDebugEvent(event: AgentEvent): string {
     case "tool_finished":
       return `[tool_finished] ${toolLine(event.call.function.name, event.call.function.arguments, event.result)}`;
     case "approval_requested":
-      return `[approval_requested] ${event.kind} ${previewSensitiveText(event.summary)}`;
+      return `[approval_requested] ${event.kind}`;
     case "memory_recorded":
       return `[memory_recorded] ${event.kind} ${event.episodeId}`;
     case "memory_retrieved":

@@ -55,7 +55,7 @@ void test("formats tagged debug lines for all agent events", () => {
       kind: "edit",
       summary: "Create HelloWorld.swift.",
     }),
-    "[approval_requested] edit Create HelloWorld.swift.",
+    "[approval_requested] edit",
   );
   assert.equal(
     formatDebugEvent({
@@ -101,6 +101,15 @@ void test("formats tagged debug lines for all agent events", () => {
 });
 
 void test("redacts credentials and omits secret-file payloads", () => {
+  assert.equal(
+    formatDebugEvent({
+      type: "approval_requested",
+      requestId: "req-env",
+      kind: "edit",
+      summary: 'Create ".env":\n+ FOO=opaque-value',
+    }),
+    "[approval_requested] edit",
+  );
   assert.equal(
     formatDebugEvent({
       type: "error",
