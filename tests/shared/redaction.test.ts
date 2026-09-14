@@ -61,10 +61,13 @@ void test("redacts credential fields nested in JSON tool results", () => {
 
 void test("redacts credentials in natural-language previews", () => {
   const preview = previewSensitiveText(
-    'use password hunter2 and my API key is "private-value"; the token equals abc.def-123',
+    'use password hunter2, password is: hunter2, and my API key equals: "private-value"; the token equals abc.def-123',
   );
 
-  assert.equal(preview, "use password [REDACTED] and my API key [REDACTED]; the token [REDACTED]");
+  assert.equal(
+    preview,
+    "use password [REDACTED], password [REDACTED], and my API key [REDACTED]; the token [REDACTED]",
+  );
   assert.doesNotMatch(preview, /hunter2|private-value|abc\.def-123/);
 });
 

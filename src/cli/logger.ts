@@ -139,7 +139,7 @@ export function createLogger(options: LoggerOptions = {}): Logger {
 
   const log = (level: LogLevel, message: string): void => {
     if (levelRank[level] < minimum) return;
-    for (const line of message.split("\n")) write(`${level} ${line}`);
+    for (const line of message.split("\n")) write(`${level} ${escapeLogLine(line)}`);
   };
 
   return {
@@ -175,6 +175,23 @@ function secureLogFile(fd: number): void {
 
 function isLogLevel(value: string): value is LogLevel {
   return logLevels.some((level) => level === value);
+}
+
+function escapeLogLine(line: string): string {
+  return [...line]
+    .map((character) => {
+      const codePoint = character.codePointAt(0)!;
+      if (
+        codePoint <= 0x1f ||
+        (codePoint >= 0x7f && codePoint <= 0x9f) ||
+        (codePoint >= 0x202a && codePoint <= 0x202e) ||
+        (codePoint >= 0x2066 && codePoint <= 0x2069)
+      ) {
+        return `\\u${codePoint.toString(16).padStart(4, "0")}`;
+      }
+      return character;
+    })
+    .join("");
 }
 
 function errorMessage(error: unknown): string {

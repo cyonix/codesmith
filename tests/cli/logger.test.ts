@@ -35,6 +35,16 @@ void test("writes leveled lines and hides messages below the configured level", 
   assert.deepEqual(lines, ["warn visible warn", "error visible error", "error second line"]);
 });
 
+void test("escapes terminal controls in log lines", () => {
+  const lines: string[] = [];
+  const logger = createLogger({ write: (line) => lines.push(line) });
+
+  logger.debug("prompt\u001b[2J\u009b2J\u202eend");
+
+  assert.deepEqual(lines, ["debug prompt\\u001b[2J\\u009b2J\\u202eend"]);
+  assert.doesNotMatch(lines[0] ?? "", new RegExp(`[${String.fromCodePoint(0x1b, 0x9b, 0x202e)}]`));
+});
+
 void test("resolves the flag before the environment level", () => {
   assert.equal(resolveLogLevel("info", "debug"), "info");
   assert.equal(resolveLogLevel(undefined, "error"), "error");
