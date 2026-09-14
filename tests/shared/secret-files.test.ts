@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { resultContainsSensitiveDiff, touchesSecretFile } from "../../src/shared/secret-files.js";
+import {
+  resultContainsSensitiveContent,
+  resultContainsSensitiveDiff,
+  touchesSecretFile,
+} from "../../src/shared/secret-files.js";
 
 void test("accepts only exact schemas for known tool payloads", () => {
   const validPayloads: ReadonlyArray<readonly [string, object]> = [
@@ -56,6 +60,18 @@ void test("treats spaced credential labels in diffs as sensitive", () => {
   );
   assert.equal(
     resultContainsSensitiveDiff(JSON.stringify({ stdout: "-Private key = private-value" })),
+    true,
+  );
+});
+
+void test("treats credentials from ordinary structured files as sensitive", () => {
+  assert.equal(
+    resultContainsSensitiveContent(
+      JSON.stringify({
+        path: "config.json",
+        content: '{"database_url":"postgres://user:password@db.test/app"}',
+      }),
+    ),
     true,
   );
 });

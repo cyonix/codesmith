@@ -1,4 +1,5 @@
 import path from "node:path";
+import { redactSensitiveText } from "./redaction.js";
 
 export const omittedSecretPreview = "[omitted secret file]";
 
@@ -9,7 +10,11 @@ export function isSensitiveToolPayload(
 ): boolean {
   if (touchesSecretFile(toolName, argumentsValue)) return true;
   if (result === undefined) return false;
-  return resultReferencesSecretFile(result) || resultContainsSensitiveDiff(result);
+  return (
+    resultReferencesSecretFile(result) ||
+    resultContainsSensitiveDiff(result) ||
+    resultContainsSensitiveContent(result)
+  );
 }
 
 export function touchesSecretFile(toolName: string, argumentsValue: string): boolean {
@@ -35,6 +40,10 @@ export function resultContainsSensitiveDiff(result: string): boolean {
   } catch {
     return false;
   }
+}
+
+export function resultContainsSensitiveContent(result: string): boolean {
+  return redactSensitiveText(result) !== result;
 }
 
 function containsSecretPath(value: unknown): boolean {

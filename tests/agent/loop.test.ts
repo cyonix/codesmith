@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import type { AgentEvent } from "../../src/agent/events.js";
-import { AgentLoop } from "../../src/agent/loop.js";
+import { AgentLoop, maximumRetainedHistoryBytes } from "../../src/agent/loop.js";
 import {
   EpisodicMemory,
   configureSemanticMemory,
@@ -116,6 +116,58 @@ void test("removes the oldest completed turn only when the history needs room", 
   assert.ok(requestAtCapacity.some((message) => message.content === "Prompt 1."));
   assert.ok(requestAtCapacity.some((message) => message.content === "Response 14."));
   assert.ok(requestAtCapacity.some((message) => message.content === "Prompt 15."));
+});
+
+void test("compacts oversized retained responses to the cumulative UTF-8 history budget", async () => {
+  const oversizedResponse = "🌲".repeat(3 * 1024 * 1024);
+  const provider = new MockProvider([
+    { content: oversizedResponse, toolCalls: [] },
+    { content: "Retained context was compacted.", toolCalls: [] },
+  ]);
+  const loop = new AgentLoop(provider, await ToolExecutor.create(process.cwd(), true));
+
+  assert.equal(await loop.run("Give a detailed answer."), oversizedResponse);
+  assert.equal(await loop.run("What did you say?"), "Retained context was compacted.");
+
+  const retainedRequest = provider.messages[1] ?? [];
+  assert.ok(
+    retainedRequest.some((message) => message.content?.includes("History entry truncated")),
+  );
+  assert.ok(
+    retainedRequest.reduce((total, message) => total + messageUtf8Bytes(message), 0) <=
+      maximumRetainedHistoryBytes,
+  );
+});
+
+void test("keeps tool calls paired with results while compacting retained context", async () => {
+  const provider = new MockProvider([
+    {
+      content: "x".repeat(10 * 1024 * 1024),
+      toolCalls: [stateGoalCall("oversized-goal")],
+    },
+    { content: "Goal recorded.", toolCalls: [] },
+  ]);
+  const loop = new AgentLoop(provider, await ToolExecutor.create(process.cwd(), true));
+
+  assert.equal(await loop.run("Set a goal."), "Goal recorded.");
+
+  const retainedRequest = provider.messages[1] ?? [];
+  assert.ok(
+    retainedRequest.some(
+      (message) =>
+        message.role === "assistant" &&
+        message.tool_calls?.some((call) => call.id === "oversized-goal"),
+    ),
+  );
+  assert.ok(
+    retainedRequest.some(
+      (message) => message.role === "tool" && message.tool_call_id === "oversized-goal",
+    ),
+  );
+  assert.ok(
+    retainedRequest.reduce((total, message) => total + messageUtf8Bytes(message), 0) <=
+      maximumRetainedHistoryBytes,
+  );
 });
 
 void test("tool loop interprets yes as confirmation of the preceding file-removal question", async (context) => {
@@ -611,6 +663,35 @@ void test("omits secret-file tool content from later provider request previews",
   }
 });
 
+void test("taints later provider previews after reading structured credentials from an ordinary file", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  await writeFile(
+    path.join(root, "config.json"),
+    '{"database_url":"postgres://user:password@db.test/app"}',
+  );
+  const events: AgentEvent[] = [];
+  const provider = new MockProvider([
+    {
+      toolCalls: [
+        { id: "read-config", function: { name: "read_file", arguments: '{"path":"config.json"}' } },
+      ],
+    },
+    { content: "I cannot show that configuration.", toolCalls: [] },
+  ]);
+
+  await new AgentLoop(provider, await ToolExecutor.create(root, true), 12, (event) =>
+    events.push(event),
+  ).run("Read config.json.");
+
+  const secondRequest = events.filter((event) => event.type === "provider_request").at(1);
+  assert.equal(secondRequest?.type, "provider_request");
+  if (secondRequest?.type === "provider_request") {
+    assert.equal(secondRequest.secretTainted, true);
+    assert.ok(secondRequest.messages.every((message) => message.preview === ""));
+  }
+});
+
 void test("retains secret taint after a provider failure before an assistant reply", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
   context.after(async () => rm(root, { recursive: true, force: true }));
@@ -888,6 +969,22 @@ function stateGoalCall(
       arguments: JSON.stringify({ summary, completion_criteria: completionCriteria }),
     },
   };
+}
+
+function messageUtf8Bytes(message: ChatMessage): number {
+  return (
+    Buffer.byteLength(message.role, "utf8") +
+    Buffer.byteLength(message.content ?? "", "utf8") +
+    Buffer.byteLength(message.tool_call_id ?? "", "utf8") +
+    (message.tool_calls?.reduce(
+      (total, call) =>
+        total +
+        Buffer.byteLength(call.id, "utf8") +
+        Buffer.byteLength(call.function.name, "utf8") +
+        Buffer.byteLength(call.function.arguments, "utf8"),
+      0,
+    ) ?? 0)
+  );
 }
 
 class MockProvider implements ChatProvider {

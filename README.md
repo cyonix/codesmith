@@ -81,6 +81,10 @@ The model is stored outside projects in `~/Library/Caches/codesmith` on macOS,
 reviewed model; session episodes are discarded when the session closes. Enter
 `/clear-memory` to discard the current session's episodes sooner.
 
+Conversation context is separately bounded to 32 messages and 64 KiB of UTF-8
+data. When needed, CodeSmith removes complete old submissions or compacts large
+retained responses and tool results. This does not change semantic memory.
+
 To end the session, enter `/exit` or `/quit`.
 
 ## Documentation

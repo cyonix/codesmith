@@ -54,7 +54,7 @@ void test("returns the best-matching chunk from a multi-chunk episode", async ()
   assert.match(retrieved ?? "", /semantic memory needle/);
 });
 
-void test("omits conventional secret-file episodes and redacts token-shaped values", async () => {
+void test("omits conventional and structured credential-file episodes", async () => {
   const events = new EventSink();
   const memory = new EpisodicMemory(
     configureSemanticMemory(true),
@@ -76,9 +76,9 @@ void test("omits conventional secret-file episodes and redacts token-shaped valu
 
   const retrieved = await memory.retrieve("README token");
 
-  assert.equal(events.recordedEvents.length, 1);
+  assert.equal(events.recordedEvents.length, 0);
   assert.doesNotMatch(retrieved ?? "", /super-secret/);
-  assert.match(retrieved ?? "", /\[REDACTED\]/);
+  assert.equal(retrieved, undefined);
 });
 
 void test("omits search results that reference conventional secret files", async () => {

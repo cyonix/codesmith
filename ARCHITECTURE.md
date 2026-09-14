@@ -223,12 +223,20 @@ messages, timelines, diff previews, and approval dialogs.
 5. The sandboxed executor runs approved tool calls on the local machine.
 6. The tool results return to the model until it gives a final response.
 
-CodeSmith keeps up to 32 messages of conversation context for the current
-session. It removes the oldest complete submission only when the active
-submission needs room for a model response or tool result. This is a
-message-count limit, not a token-size limit. It interprets brief replies such
-as `yes`, `no`, `proceed`, and `do it` using the agent's most recent unresolved
-question.
+CodeSmith keeps up to 32 messages and 64 KiB of UTF-8 message data as
+conversation context for the current session. The byte measure includes message
+content, tool-call IDs, tool names, and tool arguments. It removes the oldest
+complete submission only when the active submission needs room for a model
+response or tool result. It removes a complete submission as one unit, so an
+assistant tool call is never retained without its result. When one retained
+assistant response or tool result is too large, CodeSmith compacts its text
+with a size-marked truncation notice while retaining tool-call and result
+identifiers. A retained message is limited to 8 KiB, which prevents one large
+result from consuming the full cumulative budget. The active user submission is
+never evicted. This UTF-8 budget is a conservative token-like bound, not an
+exact provider token limit. It
+interprets brief replies such as `yes`, `no`, `proceed`, and `do it` using the
+agent's most recent unresolved question.
 
 ### Goals and completion criteria
 

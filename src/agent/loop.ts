@@ -13,8 +13,13 @@ import {
 import { ToolExecutor } from "../workspace/tools.js";
 import type { ChatMessage, ChatProvider, ToolCall } from "../shared/types.js";
 
+export const maximumRetainedHistoryBytes = 64 * 1024;
+const maximumRetainedHistoryEntryBytes = 8 * 1024;
+
 export class AgentLoop {
   private static readonly maximumHistoryMessages = 32;
+  // This byte limit is a conservative token-like limit for retained context.
+  private static readonly maximumHistoryBytes = maximumRetainedHistoryBytes;
   private static readonly maximumToolCallsPerRun = 12;
   private readonly goals = new GoalState();
   private secretAccessedInSubmission = false;
@@ -54,6 +59,7 @@ export class AgentLoop {
     this.memory?.startSubmission();
     this.messages.push({ role: "user", content: prompt });
     let submissionStart = this.messages.length - 1;
+    submissionStart = this.makeRoomFor(0, 0, submissionStart);
 
     let toolCallsUsed = 0;
     let toolRounds = 0;
@@ -61,8 +67,8 @@ export class AgentLoop {
     while (true) {
       this.assertOpen();
       const providerResponseReserve = memoryContext && toolRounds === 0 ? 3 : 1;
-      submissionStart = this.makeRoomFor(providerResponseReserve, submissionStart);
-      this.assertHistoryCapacity(providerResponseReserve);
+      submissionStart = this.makeRoomFor(providerResponseReserve, 0, submissionStart);
+      this.assertHistoryCapacity(providerResponseReserve, 0, true);
       this.emit({ type: "status", phase: "thinking" });
       this.assertOpen();
 
@@ -99,15 +105,20 @@ export class AgentLoop {
         );
       }
 
-      submissionStart = this.makeRoomFor(1 + response.toolCalls.length, submissionStart);
-      this.assertHistoryCapacity(1 + response.toolCalls.length);
+      submissionStart = this.makeRoomFor(1 + response.toolCalls.length, 0, submissionStart);
+      this.assertHistoryCapacity(1 + response.toolCalls.length, 0, true);
       const assistantMessage: ChatMessage = {
         role: "assistant",
         content: response.content,
         tool_calls: response.toolCalls,
       };
-      this.messages.push(assistantMessage);
-      if (this.secretAccessedInSubmission) this.taintedMessages.add(assistantMessage);
+      const retainedAssistantMessage = this.appendRetainedMessage(
+        assistantMessage,
+        submissionStart,
+      );
+      if (this.secretAccessedInSubmission)
+        this.taintedMessages.add(retainedAssistantMessage.message);
+      submissionStart = retainedAssistantMessage.submissionStart;
       this.provider.acceptCompletion?.();
 
       if (response.toolCalls.length === 0) {
@@ -131,9 +142,12 @@ export class AgentLoop {
           call.function.arguments,
           result,
         );
-        const toolMessage: ChatMessage = { role: "tool", content: result, tool_call_id: call.id };
-        this.messages.push(toolMessage);
-        if (this.secretAccessedInSubmission) this.taintedMessages.add(toolMessage);
+        const retainedToolMessage = this.appendRetainedMessage(
+          { role: "tool", content: result, tool_call_id: call.id },
+          submissionStart,
+        );
+        if (this.secretAccessedInSubmission) this.taintedMessages.add(retainedToolMessage.message);
+        submissionStart = retainedToolMessage.submissionStart;
         this.emit({
           type: "tool_finished",
           call,
@@ -221,9 +235,29 @@ export class AgentLoop {
     return undefined;
   }
 
-  private makeRoomFor(requiredMessages: number, submissionStart: number): number {
+  private appendRetainedMessage(
+    message: ChatMessage,
+    submissionStart: number,
+  ): { message: ChatMessage; submissionStart: number } {
+    submissionStart = this.makeRoomFor(1, historyMessageBytes(message), submissionStart);
+    const availableBytes = Math.max(0, AgentLoop.maximumHistoryBytes - historyBytes(this.messages));
+    const retainedMessage = compactHistoryMessage(
+      message,
+      Math.min(availableBytes, maximumRetainedHistoryEntryBytes),
+    );
+    this.messages.push(retainedMessage);
+    this.assertHistoryCapacity(0, 0, true);
+    return { message: retainedMessage, submissionStart };
+  }
+
+  private makeRoomFor(
+    requiredMessages: number,
+    requiredBytes: number,
+    submissionStart: number,
+  ): number {
     while (
-      this.messages.length + requiredMessages > AgentLoop.maximumHistoryMessages &&
+      (this.messages.length + requiredMessages > AgentLoop.maximumHistoryMessages ||
+        historyBytes(this.messages) + requiredBytes > AgentLoop.maximumHistoryBytes) &&
       submissionStart > 1
     ) {
       const nextUser = this.messages.findIndex(
@@ -236,14 +270,94 @@ export class AgentLoop {
     return submissionStart;
   }
 
-  private assertHistoryCapacity(requiredMessages: number): void {
-    if (this.messages.length + requiredMessages > AgentLoop.maximumHistoryMessages)
+  private assertHistoryCapacity(
+    requiredMessages: number,
+    requiredBytes: number,
+    allowActiveSubmissionOversize = false,
+  ): void {
+    if (
+      this.messages.length + requiredMessages > AgentLoop.maximumHistoryMessages ||
+      (!allowActiveSubmissionOversize &&
+        historyBytes(this.messages) + requiredBytes > AgentLoop.maximumHistoryBytes)
+    )
       throw new CodeSmithError("loop", "The agent exceeded the maximum conversation history.");
   }
 
   private assertOpen(): void {
     if (this.isClosed()) throw new CodeSmithError("loop", "This agent session is closed.");
   }
+}
+
+function historyBytes(messages: readonly ChatMessage[]): number {
+  return messages.reduce((total, message) => total + historyMessageBytes(message), 0);
+}
+
+function historyMessageBytes(message: ChatMessage): number {
+  return (
+    Buffer.byteLength(message.role, "utf8") +
+    Buffer.byteLength(message.content ?? "", "utf8") +
+    Buffer.byteLength(message.tool_call_id ?? "", "utf8") +
+    (message.tool_calls?.reduce(
+      (total, call) =>
+        total +
+        Buffer.byteLength(call.id, "utf8") +
+        Buffer.byteLength(call.function.name, "utf8") +
+        Buffer.byteLength(call.function.arguments, "utf8"),
+      0,
+    ) ?? 0)
+  );
+}
+
+function compactHistoryMessage(message: ChatMessage, maximumBytes: number): ChatMessage {
+  if (historyMessageBytes(message) <= maximumBytes) return message;
+
+  const compacted: ChatMessage = {
+    ...message,
+    tool_calls: message.tool_calls?.map((call) => ({
+      ...call,
+      function: { ...call.function },
+    })),
+  };
+  let excessBytes = historyMessageBytes(compacted) - maximumBytes;
+
+  if (compacted.content && excessBytes > 0) {
+    const content = compactUtf8Text(compacted.content, excessBytes);
+    excessBytes -=
+      Buffer.byteLength(compacted.content, "utf8") - Buffer.byteLength(content, "utf8");
+    compacted.content = content;
+  }
+
+  for (const call of compacted.tool_calls ?? []) {
+    if (excessBytes <= 0) break;
+    const argumentsText = compactUtf8Text(call.function.arguments, excessBytes);
+    excessBytes -=
+      Buffer.byteLength(call.function.arguments, "utf8") - Buffer.byteLength(argumentsText, "utf8");
+    call.function.arguments = argumentsText;
+  }
+
+  return compacted;
+}
+
+function compactUtf8Text(text: string, bytesToRemove: number): string {
+  const originalBytes = Buffer.byteLength(text, "utf8");
+  const marker = `\n[History entry truncated; original size: ${originalBytes} UTF-8 bytes.]\n`;
+  const maximumBytes = Math.max(0, originalBytes - bytesToRemove);
+  if (Buffer.byteLength(marker, "utf8") >= maximumBytes) return utf8Prefix(marker, maximumBytes);
+
+  const prefixBytes = maximumBytes - Buffer.byteLength(marker, "utf8");
+  return `${utf8Prefix(text, prefixBytes)}${marker}`;
+}
+
+function utf8Prefix(text: string, maximumBytes: number): string {
+  let prefix = "";
+  let usedBytes = 0;
+  for (const character of text) {
+    const characterBytes = Buffer.byteLength(character, "utf8");
+    if (usedBytes + characterBytes > maximumBytes) break;
+    prefix += character;
+    usedBytes += characterBytes;
+  }
+  return prefix;
 }
 
 function providerRequestEvent(
