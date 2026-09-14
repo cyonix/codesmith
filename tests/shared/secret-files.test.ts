@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { touchesSecretFile } from "../../src/shared/secret-files.js";
+import { resultContainsSensitiveDiff, touchesSecretFile } from "../../src/shared/secret-files.js";
 
 void test("accepts only exact schemas for known tool payloads", () => {
   const validPayloads: ReadonlyArray<readonly [string, object]> = [
@@ -47,4 +47,15 @@ void test("treats unknown and schema-invalid tool payloads as sensitive", () => 
   for (const [toolName, argumentsValue] of invalidPayloads) {
     assert.equal(touchesSecretFile(toolName, JSON.stringify(argumentsValue)), true, toolName);
   }
+});
+
+void test("treats spaced credential labels in diffs as sensitive", () => {
+  assert.equal(
+    resultContainsSensitiveDiff(JSON.stringify({ stdout: "+API key: private-value" })),
+    true,
+  );
+  assert.equal(
+    resultContainsSensitiveDiff(JSON.stringify({ stdout: "-Private key = private-value" })),
+    true,
+  );
 });

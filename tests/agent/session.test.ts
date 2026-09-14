@@ -215,17 +215,46 @@ void test("closing from tool_started prevents an auto-approved edit", async (con
   await assert.rejects(() => readFile(path.join(root, "HelloWorld.swift")));
 });
 
+void test("taints error events after a secret-bearing tool result", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  await (await import("node:fs/promises")).writeFile(path.join(root, ".env"), "FOO=opaque-value\n");
+  const provider = new MockProvider([
+    {
+      toolCalls: [
+        {
+          id: "read-env",
+          function: { name: "read_file", arguments: '{"path":".env"}' },
+        },
+      ],
+    },
+    new Error("provider failed with opaque-value"),
+  ]);
+  const session = await AgentSession.create({ projectRoot: root, provider, autoApprove: true });
+  const events: AgentEvent[] = [];
+  session.subscribe((event) => events.push(event));
+
+  await assert.rejects(() => session.submit("Read the environment file."), /opaque-value/);
+
+  assert.deepEqual(events.at(-1), {
+    type: "error",
+    message: "provider failed with opaque-value",
+    secretTainted: true,
+  });
+});
+
 class MockProvider implements ChatProvider {
   private index = 0;
   calls = 0;
 
-  constructor(private readonly responses: AssistantResponse[]) {}
+  constructor(private readonly responses: ReadonlyArray<AssistantResponse | Error>) {}
 
   complete(): Promise<AssistantResponse> {
     this.calls += 1;
     const response = this.responses[this.index];
     this.index += 1;
     if (!response) throw new Error("Mock provider exhausted.");
+    if (response instanceof Error) return Promise.reject(response);
     return Promise.resolve(response);
   }
 }

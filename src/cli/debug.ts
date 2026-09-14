@@ -28,6 +28,7 @@ export function formatDebugEvent(event: AgentEvent): string | undefined {
     case "memory_failed":
       return `[memory] failed ${event.phase} ${previewSensitiveText(event.message)}`;
     case "error":
+      if (event.secretTainted) return "[error] [omitted after secret access]";
       return `[error] ${previewSensitiveText(event.message)}`;
     default:
       return undefined;

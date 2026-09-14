@@ -107,9 +107,18 @@ void test("redacts credentials and skips noisy events", () => {
   assert.equal(
     formatDebugEvent({
       type: "error",
+      secretTainted: false,
       message: "provider failed Bearer tok_secret",
     }),
     "[error] provider failed [REDACTED]",
+  );
+  assert.equal(
+    formatDebugEvent({
+      type: "error",
+      message: "provider failed opaque-value",
+      secretTainted: true,
+    }),
+    "[error] [omitted after secret access]",
   );
   assert.equal(
     formatDebugEvent({

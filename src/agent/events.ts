@@ -27,7 +27,7 @@ export type AgentEvent =
       message: string;
       blocksFutureSubmissions: boolean;
     }
-  | { type: "error"; message: string }
+  | { type: "error"; message: string; secretTainted: boolean }
   | {
       type: "provider_request";
       round: number;

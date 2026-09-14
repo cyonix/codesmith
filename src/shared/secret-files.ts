@@ -62,7 +62,7 @@ function containsSensitiveDiff(value: unknown): boolean {
     return value.split("\n").some((line) => {
       if (!/^[+-](?![+-])/.test(line)) return false;
       return (
-        /(?:api[_-]?key|private[_-]?key|token|secret|password|database[_-]?url)\s*[:=]/i.test(
+        /(?:api[\s_-]?key|private[\s_-]?key|token|secret|password|database[\s_-]?url)\s*[:=]/i.test(
           line,
         ) || /[a-z][a-z0-9+.-]*:\/\/[^/\s:@]+:[^@\s/]+@/i.test(line)
       );

@@ -124,6 +124,7 @@ export class AgentSession {
       this.emit({
         type: "error",
         message: error instanceof Error ? error.message : "Agent session failed.",
+        secretTainted: this.loop.secretTainted,
       });
       throw error;
     } finally {
