@@ -222,16 +222,20 @@ function providerRequestEvent(
     type: "provider_request",
     round,
     toolCount,
-    messages: messages.map((message) => ({
+    messages: messages.map((message, index) => ({
       role: message.role,
-      preview: providerMessagePreview(message, messages),
+      preview: providerMessagePreview(message, messages, index),
     })),
   };
 }
 
-function providerMessagePreview(message: ChatMessage, messages: readonly ChatMessage[]): string {
+function providerMessagePreview(
+  message: ChatMessage,
+  messages: readonly ChatMessage[],
+  messageIndex: number,
+): string {
   if (message.role === "tool") {
-    const call = findToolCall(messages, message.tool_call_id);
+    const call = findToolCall(messages, messageIndex, message.tool_call_id);
     if (!call || isSensitiveToolPayload(call.function.arguments, message.content ?? ""))
       return omittedSecretPreview;
     return previewSensitiveText(message.content ?? "");
@@ -244,10 +248,12 @@ function providerMessagePreview(message: ChatMessage, messages: readonly ChatMes
 
 function findToolCall(
   messages: readonly ChatMessage[],
+  beforeIndex: number,
   toolCallId: string | undefined,
 ): ToolCall | undefined {
   if (!toolCallId) return undefined;
-  for (const message of messages) {
+  for (let index = beforeIndex - 1; index >= 0; index -= 1) {
+    const message = messages[index];
     const match = message.tool_calls?.find((call) => call.id === toolCallId);
     if (match) return match;
   }

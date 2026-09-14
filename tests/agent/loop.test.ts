@@ -615,6 +615,45 @@ void test("omits secret-file tool content from later provider request previews",
   }
 });
 
+void test("matches reused tool call IDs to their preceding call when previewing results", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  await writeFile(path.join(root, "README.md"), "Public file\n");
+  await writeFile(path.join(root, ".env"), "FOO=opaque-value\n");
+  const events: AgentEvent[] = [];
+  const provider = new MockProvider([
+    {
+      toolCalls: [
+        { id: "read-1", function: { name: "read_file", arguments: '{"path":"README.md"}' } },
+      ],
+    },
+    { content: "I read the public file.", toolCalls: [] },
+    {
+      toolCalls: [{ id: "read-1", function: { name: "read_file", arguments: '{"path":".env"}' } }],
+    },
+    { content: "I cannot show that file.", toolCalls: [] },
+  ]);
+  const loop = new AgentLoop(provider, await ToolExecutor.create(root, true), 12, (event) =>
+    events.push(event),
+  );
+
+  await loop.run("Read the README.");
+  await loop.run("Read the env file.");
+
+  const finalRequest = events.filter((event) => event.type === "provider_request").at(-1);
+  assert.equal(finalRequest?.type, "provider_request");
+  if (finalRequest?.type === "provider_request") {
+    const secretResult = finalRequest.messages.find(
+      (message) => message.role === "tool" && message.preview.includes("opaque-value"),
+    );
+    assert.equal(secretResult, undefined);
+    assert.equal(
+      finalRequest.messages.filter((message) => message.role === "tool").at(-1)?.preview,
+      "[omitted secret file]",
+    );
+  }
+});
+
 function stateGoalCall(
   id = "goal-1",
   summary = "Create HelloWorld.swift.",
