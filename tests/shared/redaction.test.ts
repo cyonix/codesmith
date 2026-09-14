@@ -53,10 +53,15 @@ void test("redacts complete unquoted credential values with commas", () => {
 });
 
 void test("redacts credential fields nested in JSON tool results", () => {
-  const redacted = redactSensitiveText(JSON.stringify({ content: '{"api_key":"private-value"}' }));
+  for (const value of [
+    JSON.stringify({ content: '{"api_key":"private-value"}' }),
+    JSON.stringify({ content: '{"api_key":"abc\\"def"}' }),
+  ]) {
+    const redacted = redactSensitiveText(value);
 
-  assert.doesNotMatch(redacted, /private-value/);
-  assert.deepEqual(JSON.parse(redacted), { content: '{"api_key":"[REDACTED]"}' });
+    assert.doesNotMatch(redacted, /private-value|abc\\"def/);
+    assert.deepEqual(JSON.parse(redacted), { content: '{"api_key":"[REDACTED]"}' });
+  }
 });
 
 void test("redacts URL-userinfo credentials in tool results", () => {

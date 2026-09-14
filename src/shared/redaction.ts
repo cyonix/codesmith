@@ -19,7 +19,7 @@ export function redactSensitiveText(value: string): string {
       "$1'[REDACTED]'",
     )
     .replace(
-      /(\\"[A-Za-z0-9_ -]*?(?:api[\s_-]?key|private[\s_-]?key|token|secret|password)[A-Za-z0-9_ -]*\\"\s*:\s*)\\"(?:(?:\\\\.)|[^"\\])*\\"/gim,
+      /(\\"[A-Za-z0-9_ -]*?(?:api[\s_-]?key|private[\s_-]?key|token|secret|password)[A-Za-z0-9_ -]*\\"\s*:\s*)\\"(?:(?:\\.)|[^"\\])*\\"/gim,
       '$1\\"[REDACTED]\\"',
     )
     .replace(
