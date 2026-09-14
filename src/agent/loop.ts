@@ -18,7 +18,7 @@ export class AgentLoop {
   private static readonly maximumToolCallsPerRun = 12;
   private readonly goals = new GoalState();
   private secretAccessedInSubmission = false;
-  private readonly taintedAssistantMessages = new WeakSet<ChatMessage>();
+  private readonly taintedMessages = new WeakSet<ChatMessage>();
   private readonly messages: ChatMessage[] = [
     {
       role: "system",
@@ -65,7 +65,7 @@ export class AgentLoop {
       const providerTools = [stateGoalDefinition, ...this.tools.definitions];
       const providerMessages = this.messagesForProvider(memoryContext, toolRounds === 0);
       this.secretAccessedInSubmission ||= providerMessages.some((message) =>
-        this.taintedAssistantMessages.has(message),
+        this.taintedMessages.has(message),
       );
       this.emit(
         providerRequestEvent(
@@ -103,7 +103,7 @@ export class AgentLoop {
         tool_calls: response.toolCalls,
       };
       this.messages.push(assistantMessage);
-      if (this.secretAccessedInSubmission) this.taintedAssistantMessages.add(assistantMessage);
+      if (this.secretAccessedInSubmission) this.taintedMessages.add(assistantMessage);
       this.provider.acceptCompletion?.();
 
       if (response.toolCalls.length === 0) {
@@ -126,7 +126,9 @@ export class AgentLoop {
           call.function.arguments,
           result,
         );
-        this.messages.push({ role: "tool", content: result, tool_call_id: call.id });
+        const toolMessage: ChatMessage = { role: "tool", content: result, tool_call_id: call.id };
+        this.messages.push(toolMessage);
+        if (this.secretAccessedInSubmission) this.taintedMessages.add(toolMessage);
         this.emit({
           type: "tool_finished",
           call,

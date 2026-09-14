@@ -611,6 +611,35 @@ void test("omits secret-file tool content from later provider request previews",
   }
 });
 
+void test("retains secret taint after a provider failure before an assistant reply", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  await writeFile(path.join(root, ".env"), "FOO=opaque-value\n");
+  const events: AgentEvent[] = [];
+  const provider = new MockProvider([
+    {
+      toolCalls: [
+        { id: "read-env", function: { name: "read_file", arguments: '{"path":".env"}' } },
+      ],
+    },
+    new Error("temporary provider failure"),
+    { content: "Recovered.", toolCalls: [] },
+  ]);
+  const loop = new AgentLoop(provider, await ToolExecutor.create(root, true), 12, (event) =>
+    events.push(event),
+  );
+
+  await assert.rejects(() => loop.run("Read the environment file."), /temporary provider failure/);
+  assert.equal(await loop.run("Try again."), "Recovered.");
+
+  const recoveredRequest = events.filter((event) => event.type === "provider_request").at(-1);
+  assert.equal(recoveredRequest?.type, "provider_request");
+  if (recoveredRequest?.type === "provider_request") {
+    assert.equal(recoveredRequest.secretTainted, true);
+    assert.ok(recoveredRequest.messages.every((message) => message.preview === ""));
+  }
+});
+
 void test("taints later tool and provider previews after secret access", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
   context.after(async () => rm(root, { recursive: true, force: true }));
@@ -794,11 +823,12 @@ class MockProvider implements ChatProvider {
   readonly messages: ChatMessage[][] = [];
   private index = 0;
   acceptedCompletions = 0;
-  constructor(private readonly responses: AssistantResponse[]) {}
+  constructor(private readonly responses: Array<AssistantResponse | Error>) {}
   complete(messages: ChatMessage[]): Promise<AssistantResponse> {
     this.messages.push([...messages]);
     const response = this.responses[this.index++];
     if (!response) throw new Error("Mock provider exhausted.");
+    if (response instanceof Error) return Promise.reject(response);
     return Promise.resolve(response);
   }
 

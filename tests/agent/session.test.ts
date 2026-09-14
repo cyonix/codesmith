@@ -89,6 +89,7 @@ void test("session pauses for approval and emits UI-ready lifecycle events", asy
       summary: "Create HelloWorld.swift.",
       completionCriteria: ["HelloWorld.swift exists."],
       replaced: false,
+      secretTainted: false,
     },
   );
 });
