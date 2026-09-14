@@ -21,6 +21,15 @@ void test("redacts JSON credential fields without removing surrounding syntax", 
   );
 });
 
+void test("redacts JSON credential fields with spaced keys", () => {
+  assert.equal(
+    redactSensitiveText(
+      '{"API key":"private-value","private key":"private-material","name":"safe"}',
+    ),
+    '{"API key":"[REDACTED]","private key":"[REDACTED]","name":"safe"}',
+  );
+});
+
 void test("redacts common bare provider token formats", () => {
   const redacted = redactSensitiveText(
     "hf_abcdefghijklmnop xoxb-1234567890-abcdefghijkl AIza123456789012345678901234567890123",
@@ -57,6 +66,17 @@ void test("redacts credential fields nested in JSON tool results", () => {
 
   assert.doesNotMatch(redacted, /private-value/);
   assert.deepEqual(JSON.parse(redacted), { content: '{"api_key":"[REDACTED]"}' });
+});
+
+void test("redacts escaped JSON credential fields with spaced keys", () => {
+  const redacted = redactSensitiveText(
+    JSON.stringify({ content: '{"API key":"private-value","Private Key":"private-material"}' }),
+  );
+
+  assert.doesNotMatch(redacted, /private-value|private-material/);
+  assert.deepEqual(JSON.parse(redacted), {
+    content: '{"API key":"[REDACTED]","Private Key":"[REDACTED]"}',
+  });
 });
 
 void test("redacts credentials in natural-language previews", () => {

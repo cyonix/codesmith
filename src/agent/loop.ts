@@ -107,7 +107,8 @@ export class AgentLoop {
       this.provider.acceptCompletion?.();
 
       if (response.toolCalls.length === 0) {
-        if (response.content) await this.memory?.recordAssistant(response.content);
+        if (response.content && !this.secretAccessedInSubmission)
+          await this.memory?.recordAssistant(response.content);
         if (response.content) this.emit({ type: "assistant_text", text: response.content });
         this.emit({ type: "status", phase: "complete" });
         return response.content ?? "";
@@ -135,7 +136,7 @@ export class AgentLoop {
           result,
           secretTainted: this.secretAccessedInSubmission,
         });
-        await this.memory?.recordTool(call, result);
+        if (!this.secretAccessedInSubmission) await this.memory?.recordTool(call, result);
       }
     }
   }

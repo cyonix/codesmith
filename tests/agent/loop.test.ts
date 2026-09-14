@@ -744,6 +744,77 @@ void test("taints model-controlled events in a later submission after an assista
   );
 });
 
+void test("does not record a later assistant episode after a secret-tainted submission", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  await writeFile(path.join(root, ".env"), "FOO=opaque-value\n");
+  const memoryEvents = new LoopMemoryEvents();
+  const memory = new EpisodicMemory(
+    configureSemanticMemory(true),
+    memoryEvents,
+    { create: () => Promise.resolve(new ConstantEmbeddingModel()) },
+    { install: () => Promise.resolve("/fake-model") },
+  );
+  await memory.initialize(() => Promise.resolve(true));
+  const loop = new AgentLoop(
+    new MockProvider([
+      {
+        toolCalls: [
+          { id: "read-env", function: { name: "read_file", arguments: '{"path":".env"}' } },
+        ],
+      },
+      { content: "I found FOO=opaque-value.", toolCalls: [] },
+      { content: "The follow-up is complete.", toolCalls: [] },
+    ]),
+    await ToolExecutor.create(root, true),
+    12,
+    () => {},
+    () => false,
+    memory,
+  );
+
+  await loop.run("Read the environment file.");
+  await loop.run("Give a public follow-up.");
+
+  assert.deepEqual(memoryEvents.recordedKinds, []);
+});
+
+void test("does not record a later tool episode after a secret-tainted submission", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  await writeFile(path.join(root, ".env"), "FOO=opaque-value\n");
+  const memoryEvents = new LoopMemoryEvents();
+  const memory = new EpisodicMemory(
+    configureSemanticMemory(true),
+    memoryEvents,
+    { create: () => Promise.resolve(new ConstantEmbeddingModel()) },
+    { install: () => Promise.resolve("/fake-model") },
+  );
+  await memory.initialize(() => Promise.resolve(true));
+  const loop = new AgentLoop(
+    new MockProvider([
+      {
+        toolCalls: [
+          { id: "read-env", function: { name: "read_file", arguments: '{"path":".env"}' } },
+        ],
+      },
+      { content: "I found FOO=opaque-value.", toolCalls: [] },
+      { toolCalls: [{ id: "list-files", function: { name: "list_files", arguments: "{}" } }] },
+      { content: "The follow-up is complete.", toolCalls: [] },
+    ]),
+    await ToolExecutor.create(root, true),
+    12,
+    () => {},
+    () => false,
+    memory,
+  );
+
+  await loop.run("Read the environment file.");
+  await loop.run("List public files.");
+
+  assert.deepEqual(memoryEvents.recordedKinds, []);
+});
+
 void test("matches reused tool call IDs to their preceding call when previewing results", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
   context.after(async () => rm(root, { recursive: true, force: true }));
@@ -858,7 +929,11 @@ class ConstantEmbeddingModel implements EmbeddingModel {
 }
 
 class LoopMemoryEvents implements MemoryEventSink {
-  recorded(): void {}
+  readonly recordedKinds: Array<"tool" | "assistant"> = [];
+
+  recorded(episode: { kind: "tool" | "assistant" }): void {
+    this.recordedKinds.push(episode.kind);
+  }
   retrieved(): void {}
   cleared(): void {}
   failed(): void {}
