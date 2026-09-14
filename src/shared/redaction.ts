@@ -11,16 +11,28 @@ export function redactSensitiveText(value: string): string {
     .replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, "[REDACTED]")
     .replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^/\s:@]+:[^@\s/]+@/gi, "$1[REDACTED]@")
     .replace(
-      /("[A-Za-z0-9_-]*?(?:api[_-]?key|private[_-]?key|token|secret|password)[A-Za-z0-9_-]*"\s*:\s*)"(?:(?:\\.)|[^"\\])*"/gim,
+      /("[A-Za-z0-9_ -]*?(?:api[\s_-]?key|private[\s_-]?key|token|secret|password)[A-Za-z0-9_ -]*"\s*:\s*)"(?:(?:\\.)|[^"\\])*"/gim,
       '$1"[REDACTED]"',
     )
     .replace(
-      /('[A-Za-z0-9_-]*?(?:api[_-]?key|private[_-]?key|token|secret|password)[A-Za-z0-9_-]*'\s*:\s*)'(?:(?:\\.)|[^'\\])*'/gim,
+      /('[A-Za-z0-9_ -]*?(?:api[\s_-]?key|private[\s_-]?key|token|secret|password)[A-Za-z0-9_ -]*'\s*:\s*)'(?:(?:\\.)|[^'\\])*'/gim,
       "$1'[REDACTED]'",
     )
     .replace(
-      /(\\"[A-Za-z0-9_-]*?(?:api[_-]?key|private[_-]?key|token|secret|password)[A-Za-z0-9_-]*\\"\s*:\s*)\\"(?:(?:\\.)|[^"\\])*\\"/gim,
+      /(\\"[A-Za-z0-9_ -]*?(?:api[\s_-]?key|private[\s_-]?key|token|secret|password)[A-Za-z0-9_ -]*\\"\s*:\s*)\\"(?:(?:\\\\.)|[^"\\])*\\"/gim,
       '$1\\"[REDACTED]\\"',
+    )
+    .replace(
+      /\b(api\s+key)\s*[:=]\s*(?:"(?:(?:\\.)|[^"\\])*"|'(?:(?:\\.)|[^'\\])*'|[^\s,;]+)/gim,
+      "$1 [REDACTED]",
+    )
+    .replace(
+      /\b((?:(?:private|secret)(?:\s+access)?|access)\s+key)(?:\s*[:=]\s*|\s+(?:(?:value\s+)?(?:(?:is|was|equals|equal to)(?:\s*[:=]\s*|\s+))?))(?:"(?:(?:\\.)|[^"\\])*"|'(?:(?:\\.)|[^'\\])*'|[^,;\r\n]+)/gim,
+      "$1 [REDACTED]",
+    )
+    .replace(
+      /\b((?:[A-Za-z0-9_-]*?(?:api[_-]?key|private[_-]?key|token|password)[A-Za-z0-9_-]*|secret(?!\s+(?:access\s+)?key\b)[A-Za-z0-9_-]*|api\s+key))\s+(?:(?:value\s+)?(?:(?:is|was|equals|equal to)(?:\s*[:=]\s*|\s+))?)?(?:"(?:(?:\\.)|[^"\\])*"|'(?:(?:\\.)|[^'\\])*'|[^,;\r\n]+)/gim,
+      "$1 [REDACTED]",
     )
     .replace(
       /(^|[^A-Za-z0-9])(?:[A-Za-z0-9_-]*?(?:api[_-]?key|private[_-]?key|token|secret|password)[A-Za-z0-9_-]*)\s*[:=]\s*"(?:(?:\\.)|[^"\\])*"/gim,
@@ -34,4 +46,8 @@ export function redactSensitiveText(value: string): string {
       /(^|[^A-Za-z0-9])(?:[A-Za-z0-9_-]*?(?:api[_-]?key|private[_-]?key|token|secret|password)[A-Za-z0-9_-]*)\s*[:=]\s*[^\r\n]*/gim,
       "$1[REDACTED]",
     );
+}
+
+export function previewSensitiveText(value: string): string {
+  return redactSensitiveText(value).replace(/\s+/g, " ").trim();
 }

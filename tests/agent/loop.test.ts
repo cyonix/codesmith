@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { AgentLoop } from "../../src/agent/loop.js";
+import type { AgentEvent } from "../../src/agent/events.js";
 import {
   EpisodicMemory,
   configureSemanticMemory,
@@ -238,6 +239,127 @@ void test("retrieves prior failed tool outcomes and final decisions", async (con
   assert.match(retrieved ?? "", /Tool: read_file/);
   assert.match(retrieved ?? "", /"error":/);
   assert.match(retrieved ?? "", /I decided the missing file should be created/);
+});
+
+void test("emits redacted provider-request previews before each completion", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const events: AgentEvent[] = [];
+  const provider = new MockProvider([{ content: "Ready.", toolCalls: [] }]);
+
+  await new AgentLoop(provider, await ToolExecutor.create(root, true), 12, (event) =>
+    events.push(event),
+  ).run("Create HelloWorld.swift.");
+
+  const request = events.find((event) => event.type === "provider_request");
+  assert.equal(request?.type, "provider_request");
+  if (request?.type === "provider_request") {
+    assert.equal(request.round, 0);
+    assert.ok(request.toolCount >= 8);
+    assert.ok(
+      request.messages.some(
+        (message) => message.role === "user" && message.preview.includes("HelloWorld.swift"),
+      ),
+    );
+  }
+});
+
+void test("omits secret-file tool content from later provider request previews", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  await writeFile(path.join(root, ".env"), "FOO=opaque-value\n");
+  const events: AgentEvent[] = [];
+  const provider = new MockProvider([
+    {
+      toolCalls: [{ id: "read-1", function: { name: "read_file", arguments: '{"path":".env"}' } }],
+    },
+    { content: "I cannot show that file.", toolCalls: [] },
+  ]);
+
+  await new AgentLoop(provider, await ToolExecutor.create(root, true), 12, (event) =>
+    events.push(event),
+  ).run("Read the env file.");
+
+  const secondRequest = events.filter((event) => event.type === "provider_request").at(1);
+  assert.equal(secondRequest?.type, "provider_request");
+  if (secondRequest?.type === "provider_request") {
+    const toolPreview = secondRequest.messages.find((message) => message.role === "tool")?.preview;
+    assert.equal(toolPreview, "[omitted secret file]");
+    assert.ok(
+      secondRequest.messages.some(
+        (message) => message.role === "user" && message.preview.includes("Read the env file."),
+      ),
+    );
+    assert.equal(JSON.stringify(secondRequest.messages).includes("opaque-value"), false);
+  }
+});
+
+void test("matches reused tool call IDs to their preceding call when previewing results", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  await writeFile(path.join(root, "README.md"), "Public file\n");
+  await writeFile(path.join(root, ".env"), "FOO=opaque-value\n");
+  const events: AgentEvent[] = [];
+  const provider = new MockProvider([
+    {
+      toolCalls: [
+        { id: "read-1", function: { name: "read_file", arguments: '{"path":"README.md"}' } },
+      ],
+    },
+    { content: "I read the public file.", toolCalls: [] },
+    {
+      toolCalls: [{ id: "read-1", function: { name: "read_file", arguments: '{"path":".env"}' } }],
+    },
+    { content: "I cannot show that file.", toolCalls: [] },
+  ]);
+  const loop = new AgentLoop(provider, await ToolExecutor.create(root, true), 12, (event) =>
+    events.push(event),
+  );
+
+  await loop.run("Read the README.");
+  await loop.run("Read the env file.");
+
+  const finalRequest = events.filter((event) => event.type === "provider_request").at(-1);
+  assert.equal(finalRequest?.type, "provider_request");
+  if (finalRequest?.type === "provider_request") {
+    const toolPreviews = finalRequest.messages
+      .filter((message) => message.role === "tool")
+      .map((message) => message.preview);
+    assert.ok(toolPreviews.some((preview) => preview.includes("Public file")));
+    assert.ok(toolPreviews.includes("[omitted secret file]"));
+    assert.equal(JSON.stringify(finalRequest.messages).includes("opaque-value"), false);
+  }
+});
+
+void test("omits results when an assistant response reuses a tool call ID", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  await writeFile(path.join(root, "README.md"), "Public file\n");
+  await writeFile(path.join(root, ".env"), "FOO=opaque-value\n");
+  const events: AgentEvent[] = [];
+  const provider = new MockProvider([
+    {
+      toolCalls: [
+        { id: "read-1", function: { name: "read_file", arguments: '{"path":"README.md"}' } },
+        { id: "read-1", function: { name: "read_file", arguments: '{"path":".env"}' } },
+      ],
+    },
+    { content: "I read the files.", toolCalls: [] },
+  ]);
+
+  await new AgentLoop(provider, await ToolExecutor.create(root, true), 12, (event) =>
+    events.push(event),
+  ).run("Read the README and env files.");
+
+  const secondRequest = events.filter((event) => event.type === "provider_request").at(1);
+  assert.equal(secondRequest?.type, "provider_request");
+  if (secondRequest?.type === "provider_request") {
+    const toolPreviews = secondRequest.messages
+      .filter((message) => message.role === "tool")
+      .map((message) => message.preview);
+    assert.deepEqual(toolPreviews, ["[omitted secret file]", "[omitted secret file]"]);
+    assert.equal(JSON.stringify(secondRequest.messages).includes("opaque-value"), false);
+  }
 });
 
 class MockProvider implements ChatProvider {

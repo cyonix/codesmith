@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { redactSensitiveText } from "../../src/shared/redaction.js";
+import { previewSensitiveText, redactSensitiveText } from "../../src/shared/redaction.js";
 
 void test("redacts credentials in conventional environment-variable identifiers", () => {
   const redacted = redactSensitiveText(
@@ -80,4 +80,34 @@ void test("redacts truncated private-key blocks", () => {
   const redacted = redactSensitiveText("-----BEGIN PRIVATE KEY-----\nprivate key material");
 
   assert.equal(redacted, "[REDACTED PRIVATE KEY]");
+});
+
+void test("redacts JSON credential fields with spaced keys", () => {
+  assert.equal(
+    redactSensitiveText(
+      '{"API key":"private-value","private key":"private-material","name":"safe"}',
+    ),
+    '{"API key":"[REDACTED]","private key":"[REDACTED]","name":"safe"}',
+  );
+});
+
+void test("redacts credentials in natural-language previews", () => {
+  const preview = previewSensitiveText(
+    'use password hunter2, password is: hunter2, API key: private-value, API key = "other-private-value", and my API key equals: "private-value"; the token equals abc.def-123',
+  );
+
+  assert.equal(
+    preview,
+    "use password [REDACTED], password [REDACTED], API key [REDACTED], API key [REDACTED], and my API key [REDACTED]; the token [REDACTED]",
+  );
+  assert.doesNotMatch(preview, /hunter2|private-value|other-private-value|abc\.def-123/);
+});
+
+void test("keeps the full redacted text without cutting it short", () => {
+  const prompt = `You are CodeSmith, a local coding assistant. ${"Work only through the supplied tools. ".repeat(20)}`;
+  const preview = previewSensitiveText(prompt);
+
+  assert.match(preview, /supplied tools/);
+  assert.doesNotMatch(preview, /\.\.\.$/);
+  assert.ok(preview.length > 200);
 });

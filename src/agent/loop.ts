@@ -1,8 +1,10 @@
 import { CodeSmithError } from "../shared/errors.js";
+import { previewSensitiveText } from "../shared/redaction.js";
+import { isSensitiveToolPayload, omittedSecretPreview } from "../shared/secret-files.js";
 import type { AgentEvent } from "./events.js";
 import { EpisodicMemory } from "./episodic-memory.js";
 import { ToolExecutor } from "../workspace/tools.js";
-import type { ChatMessage, ChatProvider } from "../shared/types.js";
+import type { ChatMessage, ChatProvider, ToolCall } from "../shared/types.js";
 
 export class AgentLoop {
   private static readonly maximumHistoryMessages = 32;
@@ -45,10 +47,11 @@ export class AgentLoop {
       this.emit({ type: "status", phase: "thinking" });
       this.assertOpen();
 
-      const response = await this.provider.complete(
-        this.messagesForProvider(memoryContext, toolRounds === 0),
-        this.tools.definitions,
-      );
+      const providerMessages = this.messagesForProvider(memoryContext, toolRounds === 0);
+      this.emit(providerRequestEvent(toolRounds, providerMessages, this.tools.definitions.length));
+      this.assertOpen();
+
+      const response = await this.provider.complete(providerMessages, this.tools.definitions);
       this.assertOpen();
 
       if (response.toolCalls.length > 0 && toolRounds >= this.maximumToolRounds) {
@@ -149,4 +152,55 @@ export class AgentLoop {
   private assertOpen(): void {
     if (this.isClosed()) throw new CodeSmithError("loop", "This agent session is closed.");
   }
+}
+
+function providerRequestEvent(
+  round: number,
+  messages: readonly ChatMessage[],
+  toolCount: number,
+): AgentEvent {
+  return {
+    type: "provider_request",
+    round,
+    toolCount,
+    messages: messages.map((message, index) => ({
+      role: message.role,
+      preview: providerMessagePreview(message, messages, index),
+    })),
+  };
+}
+
+function providerMessagePreview(
+  message: ChatMessage,
+  messages: readonly ChatMessage[],
+  messageIndex: number,
+): string {
+  if (message.role === "tool") {
+    const call = findToolCall(messages, messageIndex, message.tool_call_id);
+    if (
+      !call ||
+      isSensitiveToolPayload(call.function.name, call.function.arguments, message.content ?? "")
+    )
+      return omittedSecretPreview;
+    return previewSensitiveText(message.content ?? "");
+  }
+  if (message.content) return previewSensitiveText(message.content);
+  const names = message.tool_calls?.map((call) => call.function.name) ?? [];
+  if (names.length > 0) return previewSensitiveText(`tool_calls ${names.join(", ")}`);
+  return "";
+}
+
+function findToolCall(
+  messages: readonly ChatMessage[],
+  beforeIndex: number,
+  toolCallId: string | undefined,
+): ToolCall | undefined {
+  if (!toolCallId) return undefined;
+  for (let index = beforeIndex - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role !== "assistant") continue;
+    const matches = message.tool_calls?.filter((call) => call.id === toolCallId) ?? [];
+    return matches.length === 1 ? matches[0] : undefined;
+  }
+  return undefined;
 }
