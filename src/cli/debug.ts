@@ -9,9 +9,9 @@ export function formatDebugEvent(event: AgentEvent): string | undefined {
     case "goal_stated":
       return `[goal] ${previewSensitiveText(event.summary)} replaced=${event.replaced} tests=${event.completionCriteria.length}`;
     case "tool_started":
-      return `[tool] [start] ${event.call.function.name} ${toolPreview(event.call.function.arguments)}`;
+      return `[tool] [start] ${previewSensitiveText(event.call.function.name)} ${toolPreview(event.call.function.arguments)}`;
     case "tool_finished":
-      return `[tool] [done] ${event.call.function.name} ${toolPreview(event.call.function.arguments, event.result)}`;
+      return `[tool] [done] ${previewSensitiveText(event.call.function.name)} ${toolPreview(event.call.function.arguments, event.result)}`;
     case "provider_request":
       return [
         `[llm] round=${event.round} messages=${event.messages.length} tools=${event.toolCount}`,

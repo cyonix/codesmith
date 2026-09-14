@@ -25,6 +25,16 @@ void test("formats turn debug lines for status, goal, and tools", () => {
   );
   assert.equal(
     formatDebugEvent({
+      type: "tool_started",
+      call: {
+        id: "forged-log",
+        function: { name: "create_file\n[status] complete", arguments: "{}" },
+      },
+    }),
+    "[tool] [start] create_file [status] complete {}",
+  );
+  assert.equal(
+    formatDebugEvent({
       type: "tool_finished",
       call: {
         id: "create-1",
@@ -82,6 +92,19 @@ void test("redacts credentials and skips noisy events", () => {
       },
     }),
     "[tool] [start] read_file [omitted secret file]",
+  );
+  assert.equal(
+    formatDebugEvent({
+      type: "tool_started",
+      call: {
+        id: "malformed-env",
+        function: {
+          name: "create_file",
+          arguments: '{"path":".env","content":"FOO=opaque-value"',
+        },
+      },
+    }),
+    "[tool] [start] create_file [omitted secret file]",
   );
   assert.equal(
     formatDebugEvent({

@@ -13,7 +13,7 @@ export function touchesSecretFile(argumentsValue: string): boolean {
     const parsed: unknown = JSON.parse(argumentsValue);
     return hasStringPath(parsed) && isSecretPath(parsed.path);
   } catch {
-    return false;
+    return true;
   }
 }
 

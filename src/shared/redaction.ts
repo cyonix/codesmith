@@ -23,6 +23,10 @@ export function redactSensitiveText(value: string): string {
       '$1\\"[REDACTED]\\"',
     )
     .replace(
+      /\b(api\s+key)\s*[:=]\s*(?:"(?:(?:\\.)|[^"\\])*"|'(?:(?:\\.)|[^'\\])*'|[^\s,;]+)/gim,
+      "$1 [REDACTED]",
+    )
+    .replace(
       /\b((?:[A-Za-z0-9_-]*?(?:api[_-]?key|private[_-]?key|token|secret|password)[A-Za-z0-9_-]*|api\s+key))\s+(?:(?:is|was|equals|equal to)(?:\s*[:=]\s*|\s+))?(?:"(?:(?:\\.)|[^"\\])*"|'(?:(?:\\.)|[^'\\])*'|[^\s,;]+)/gim,
       "$1 [REDACTED]",
     )
