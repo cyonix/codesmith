@@ -17,6 +17,7 @@ export class AgentLoop {
   private static readonly maximumHistoryMessages = 32;
   private static readonly maximumToolCallsPerRun = 12;
   private readonly goals = new GoalState();
+  private secretAccessedInSubmission = false;
   private readonly messages: ChatMessage[] = [
     {
       role: "system",
@@ -36,6 +37,7 @@ export class AgentLoop {
 
   async run(prompt: string): Promise<string> {
     this.goals.reset();
+    this.secretAccessedInSubmission = false;
     const priorAssistantText = this.priorAssistantText();
     const memoryContext = this.memory
       ? await this.memory.retrieve(
@@ -61,7 +63,14 @@ export class AgentLoop {
 
       const providerTools = [stateGoalDefinition, ...this.tools.definitions];
       const providerMessages = this.messagesForProvider(memoryContext, toolRounds === 0);
-      this.emit(providerRequestEvent(toolRounds, providerMessages, providerTools.length));
+      this.emit(
+        providerRequestEvent(
+          toolRounds,
+          providerMessages,
+          providerTools.length,
+          this.secretAccessedInSubmission,
+        ),
+      );
       this.assertOpen();
 
       const response = await this.provider.complete(providerMessages, providerTools);
@@ -101,13 +110,23 @@ export class AgentLoop {
       toolRounds += 1;
       for (const call of orderToolCalls(response.toolCalls)) {
         this.assertOpen();
-        this.emit({ type: "tool_proposed", call });
+        this.emit({ type: "tool_proposed", call, secretTainted: this.secretAccessedInSubmission });
         this.assertOpen();
-        this.emit({ type: "tool_started", call });
+        this.emit({ type: "tool_started", call, secretTainted: this.secretAccessedInSubmission });
         this.assertOpen();
         const result = await this.executeTool(call);
+        this.secretAccessedInSubmission ||= isSensitiveToolPayload(
+          call.function.name,
+          call.function.arguments,
+          result,
+        );
         this.messages.push({ role: "tool", content: result, tool_call_id: call.id });
-        this.emit({ type: "tool_finished", call, result });
+        this.emit({
+          type: "tool_finished",
+          call,
+          result,
+          secretTainted: this.secretAccessedInSubmission,
+        });
         await this.memory?.recordTool(call, result);
       }
     }
@@ -217,14 +236,16 @@ function providerRequestEvent(
   round: number,
   messages: readonly ChatMessage[],
   toolCount: number,
+  secretTainted: boolean,
 ): AgentEvent {
   return {
     type: "provider_request",
     round,
     toolCount,
+    secretTainted,
     messages: messages.map((message, index) => ({
       role: message.role,
-      preview: providerMessagePreview(message, messages, index),
+      preview: secretTainted ? "" : providerMessagePreview(message, messages, index),
     })),
   };
 }

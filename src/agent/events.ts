@@ -4,9 +4,9 @@ import type { ToolCall } from "../shared/types.js";
 export type AgentEvent =
   | { type: "status"; phase: "thinking" | "waiting_for_approval" | "complete" }
   | { type: "assistant_text"; text: string }
-  | { type: "tool_proposed"; call: ToolCall }
-  | { type: "tool_started"; call: ToolCall }
-  | { type: "tool_finished"; call: ToolCall; result: string }
+  | { type: "tool_proposed"; call: ToolCall; secretTainted?: boolean }
+  | { type: "tool_started"; call: ToolCall; secretTainted?: boolean }
+  | { type: "tool_finished"; call: ToolCall; result: string; secretTainted?: boolean }
   | { type: "approval_requested"; requestId: string; kind: ApprovalKind; summary: string }
   | {
       type: "goal_stated";
@@ -31,6 +31,7 @@ export type AgentEvent =
       type: "provider_request";
       round: number;
       toolCount: number;
+      secretTainted: boolean;
       messages: ReadonlyArray<{
         role: "system" | "user" | "assistant" | "tool";
         preview: string;

@@ -34,7 +34,7 @@ void test("formats turn debug lines for status, goal, and tools", () => {
         function: { name: "create_file\n[status] complete", arguments: "{}" },
       },
     }),
-    "[tool] [start] create_file [status] complete {}",
+    "[tool] [start] create_file [status] complete [omitted secret file]",
   );
   assert.equal(
     formatDebugEvent({
@@ -55,6 +55,7 @@ void test("formats turn debug lines for status, goal, and tools", () => {
       type: "provider_request",
       round: 0,
       toolCount: 10,
+      secretTainted: false,
       messages: [
         { role: "system", preview: "You are CodeSmith." },
         { role: "user", preview: "Create HelloWorld.swift." },
@@ -66,6 +67,30 @@ void test("formats turn debug lines for status, goal, and tools", () => {
       "[llm] [user] Create HelloWorld.swift.",
     ].join("\n"),
   );
+});
+
+void test("omits model-controlled previews after secret access", () => {
+  const providerPreview = formatDebugEvent({
+    type: "provider_request",
+    round: 1,
+    toolCount: 10,
+    secretTainted: true,
+    messages: [{ role: "assistant", preview: "FOO=opaque-value" }],
+  });
+  assert.equal(
+    providerPreview,
+    "[llm] round=1 messages=1 tools=10\n[llm] [omitted after secret access]",
+  );
+  const toolPreview = formatDebugEvent({
+    type: "tool_started",
+    secretTainted: true,
+    call: {
+      id: "search-secret",
+      function: { name: "search_files", arguments: '{"query":"opaque-value"}' },
+    },
+  });
+  assert.equal(toolPreview, "[tool] [start] [omitted after secret access]");
+  assert.equal(`${providerPreview}\n${toolPreview}`.includes("opaque-value"), false);
 });
 
 void test("redacts credentials and skips noisy events", () => {
@@ -88,6 +113,16 @@ void test("redacts credentials and skips noisy events", () => {
   assert.equal(
     formatDebugEvent({ type: "assistant_text", text: "Created HelloWorld.swift." }),
     undefined,
+  );
+  assert.equal(
+    formatDebugEvent({
+      type: "tool_started",
+      call: {
+        id: "invalid-git-status",
+        function: { name: "git_status", arguments: '{"note":"FOO=opaque-value"}' },
+      },
+    }),
+    "[tool] [start] git_status [omitted secret file]",
   );
   assert.equal(
     formatDebugEvent({

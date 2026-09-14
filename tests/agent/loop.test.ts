@@ -606,13 +606,57 @@ void test("omits secret-file tool content from later provider request previews",
   const secondRequest = events.filter((event) => event.type === "provider_request").at(1);
   assert.equal(secondRequest?.type, "provider_request");
   if (secondRequest?.type === "provider_request") {
-    const toolPreview = secondRequest.messages.find((message) => message.role === "tool");
-    assert.equal(toolPreview?.preview, "[omitted secret file]");
-    assert.equal(
-      secondRequest.messages.some((message) => message.preview.includes("opaque-value")),
-      false,
-    );
+    assert.equal(secondRequest.secretTainted, true);
+    assert.ok(secondRequest.messages.every((message) => message.preview === ""));
   }
+});
+
+void test("taints later tool and provider previews after secret access", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  await writeFile(path.join(root, ".env"), "FOO=opaque-value\n");
+  const events: AgentEvent[] = [];
+  const provider = new MockProvider([
+    {
+      toolCalls: [
+        { id: "read-env", function: { name: "read_file", arguments: '{"path":".env"}' } },
+      ],
+    },
+    {
+      content: "I found FOO=opaque-value.",
+      toolCalls: [
+        {
+          id: "search-secret",
+          function: { name: "search_files", arguments: '{"query":"opaque-value"}' },
+        },
+      ],
+    },
+    { content: "Done.", toolCalls: [] },
+  ]);
+
+  await new AgentLoop(provider, await ToolExecutor.create(root, true), 12, (event) =>
+    events.push(event),
+  ).run("Find the environment value.");
+
+  const taintedRequest = events.filter((event) => event.type === "provider_request").at(1);
+  assert.equal(taintedRequest?.type, "provider_request");
+  if (taintedRequest?.type === "provider_request") {
+    assert.equal(taintedRequest.secretTainted, true);
+    assert.ok(taintedRequest.messages.every((message) => message.preview === ""));
+  }
+  const secretSearchEvents = events.filter(
+    (event) =>
+      (event.type === "tool_started" || event.type === "tool_finished") &&
+      event.call.id === "search-secret",
+  );
+  assert.deepEqual(
+    secretSearchEvents.map((event) =>
+      event.type === "tool_started" || event.type === "tool_finished"
+        ? event.secretTainted
+        : undefined,
+    ),
+    [true, true],
+  );
 });
 
 void test("matches reused tool call IDs to their preceding call when previewing results", async (context) => {
@@ -643,14 +687,8 @@ void test("matches reused tool call IDs to their preceding call when previewing 
   const finalRequest = events.filter((event) => event.type === "provider_request").at(-1);
   assert.equal(finalRequest?.type, "provider_request");
   if (finalRequest?.type === "provider_request") {
-    const secretResult = finalRequest.messages.find(
-      (message) => message.role === "tool" && message.preview.includes("opaque-value"),
-    );
-    assert.equal(secretResult, undefined);
-    assert.equal(
-      finalRequest.messages.filter((message) => message.role === "tool").at(-1)?.preview,
-      "[omitted secret file]",
-    );
+    assert.equal(finalRequest.secretTainted, true);
+    assert.ok(finalRequest.messages.every((message) => message.preview === ""));
   }
 });
 
@@ -677,14 +715,8 @@ void test("omits results when an assistant response reuses a tool call ID", asyn
   const secondRequest = events.filter((event) => event.type === "provider_request").at(1);
   assert.equal(secondRequest?.type, "provider_request");
   if (secondRequest?.type === "provider_request") {
-    const toolPreviews = secondRequest.messages
-      .filter((message) => message.role === "tool")
-      .map((message) => message.preview);
-    assert.deepEqual(toolPreviews, ["[omitted secret file]", "[omitted secret file]"]);
-    assert.equal(
-      secondRequest.messages.some((message) => message.preview.includes("opaque-value")),
-      false,
-    );
+    assert.equal(secondRequest.secretTainted, true);
+    assert.ok(secondRequest.messages.every((message) => message.preview === ""));
   }
 });
 

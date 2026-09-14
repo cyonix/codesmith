@@ -77,25 +77,27 @@ function isSecretToolPath(value: unknown): boolean {
 }
 
 function hasValidPathToolArguments(toolName: string, value: unknown): boolean {
-  if (!isRecord(value)) return false;
   switch (toolName) {
     case "list_files":
-      return hasOptionalString(value, "path");
+      return hasExactStringFields(value, [], ["path"]);
     case "search_files":
-      return hasRequiredString(value, "query") && hasOptionalString(value, "path");
+      return hasExactStringFields(value, ["query"], ["path"]);
     case "read_file":
     case "delete_file":
-      return hasRequiredString(value, "path");
+      return hasExactStringFields(value, ["path"]);
     case "create_file":
-      return hasRequiredString(value, "path") && hasRequiredString(value, "content");
+      return hasExactStringFields(value, ["path", "content"]);
     case "apply_patch":
-      return (
-        hasRequiredString(value, "path") &&
-        hasRequiredString(value, "expected_content") &&
-        hasRequiredString(value, "replacement")
-      );
+      return hasExactStringFields(value, ["path", "expected_content", "replacement"]);
+    case "git_status":
+    case "git_diff":
+      return hasExactStringFields(value, []);
+    case "run_command":
+      return hasExactStringFields(value, ["command"]);
+    case "state_goal":
+      return hasValidStateGoalArguments(value);
     default:
-      return true;
+      return false;
   }
 }
 
@@ -107,12 +109,33 @@ function hasStringPath(value: unknown): value is { path: string } {
   return isRecord(value) && typeof value.path === "string";
 }
 
-function hasRequiredString(value: Record<string, unknown>, field: string): boolean {
-  return typeof value[field] === "string" && value[field].length > 0;
+function hasExactStringFields(
+  value: unknown,
+  required: readonly string[],
+  optional: readonly string[] = [],
+): boolean {
+  if (!isRecord(value)) return false;
+  const allowed = new Set([...required, ...optional]);
+  if (!Object.keys(value).every((field) => allowed.has(field))) return false;
+  if (!required.every((field) => typeof value[field] === "string")) return false;
+  return optional.every((field) => value[field] === undefined || typeof value[field] === "string");
 }
 
-function hasOptionalString(value: Record<string, unknown>, field: string): boolean {
-  return value[field] === undefined || hasRequiredString(value, field);
+function hasValidStateGoalArguments(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  if (
+    !Object.keys(value).every((field) => field === "summary" || field === "completion_criteria") ||
+    typeof value.summary !== "string"
+  ) {
+    return false;
+  }
+  const criteria = value.completion_criteria;
+  return (
+    Array.isArray(criteria) &&
+    criteria.length >= 1 &&
+    criteria.length <= 8 &&
+    criteria.every((criterion) => typeof criterion === "string")
+  );
 }
 
 function isSecretPath(value: string): boolean {

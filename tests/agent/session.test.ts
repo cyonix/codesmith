@@ -74,6 +74,7 @@ void test("session pauses for approval and emits UI-ready lifecycle events", asy
   assert.equal(providerRequest?.type, "provider_request");
   if (providerRequest?.type === "provider_request") {
     assert.equal(providerRequest.round, 0);
+    assert.equal(providerRequest.secretTainted, false);
     assert.ok(providerRequest.messages.some((message) => message.role === "user"));
     assert.ok(
       providerRequest.messages.some((message) =>
