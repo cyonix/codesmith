@@ -2,16 +2,20 @@ import path from "node:path";
 
 export const omittedSecretPreview = "[omitted secret file]";
 
-export function isSensitiveToolPayload(argumentsValue: string, result?: string): boolean {
-  if (touchesSecretFile(argumentsValue)) return true;
+export function isSensitiveToolPayload(
+  toolName: string,
+  argumentsValue: string,
+  result?: string,
+): boolean {
+  if (touchesSecretFile(toolName, argumentsValue)) return true;
   if (result === undefined) return false;
   return resultReferencesSecretFile(result) || resultContainsSensitiveDiff(result);
 }
 
-export function touchesSecretFile(argumentsValue: string): boolean {
+export function touchesSecretFile(toolName: string, argumentsValue: string): boolean {
   try {
     const parsed: unknown = JSON.parse(argumentsValue);
-    return hasStringPath(parsed) && isSecretPath(parsed.path);
+    return !hasValidPathToolArguments(toolName, parsed) || isSecretToolPath(parsed);
   } catch {
     return true;
   }
@@ -68,14 +72,47 @@ function containsSensitiveDiff(value: unknown): boolean {
   return Object.values(value).some((item) => containsSensitiveDiff(item));
 }
 
+function isSecretToolPath(value: unknown): boolean {
+  return hasStringPath(value) && isSecretPath(value.path);
+}
+
+function hasValidPathToolArguments(toolName: string, value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  switch (toolName) {
+    case "list_files":
+      return hasOptionalString(value, "path");
+    case "search_files":
+      return hasRequiredString(value, "query") && hasOptionalString(value, "path");
+    case "read_file":
+    case "delete_file":
+      return hasRequiredString(value, "path");
+    case "create_file":
+      return hasRequiredString(value, "path") && hasRequiredString(value, "content");
+    case "apply_patch":
+      return (
+        hasRequiredString(value, "path") &&
+        hasRequiredString(value, "expected_content") &&
+        hasRequiredString(value, "replacement")
+      );
+    default:
+      return true;
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function hasStringPath(value: unknown): value is { path: string } {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    "path" in value &&
-    typeof value.path === "string"
-  );
+  return isRecord(value) && typeof value.path === "string";
+}
+
+function hasRequiredString(value: Record<string, unknown>, field: string): boolean {
+  return typeof value[field] === "string" && value[field].length > 0;
+}
+
+function hasOptionalString(value: Record<string, unknown>, field: string): boolean {
+  return value[field] === undefined || hasRequiredString(value, field);
 }
 
 function isSecretPath(value: string): boolean {

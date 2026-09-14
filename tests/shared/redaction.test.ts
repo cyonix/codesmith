@@ -71,6 +71,18 @@ void test("redacts credentials in natural-language previews", () => {
   assert.doesNotMatch(preview, /hunter2|private-value|other-private-value|abc\.def-123/);
 });
 
+void test("redacts values after multi-word credential labels", () => {
+  const redacted = redactSensitiveText(
+    'private key is private-value, secret key was: secret-value, secret access key equals "access-secret", and access key: access-value',
+  );
+
+  assert.equal(
+    redacted,
+    "private key [REDACTED], secret key [REDACTED], secret access key [REDACTED], and access key [REDACTED]",
+  );
+  assert.doesNotMatch(redacted, /private-value|secret-value|access-secret|access-value/);
+});
+
 void test("redacts URL-userinfo credentials in tool results", () => {
   const redacted = redactSensitiveText(
     JSON.stringify({ content: "DATABASE_URL=postgres://user:password@host/db" }),

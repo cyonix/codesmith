@@ -18,10 +18,13 @@ void test("formats turn debug lines for status, goal, and tools", () => {
       type: "tool_started",
       call: {
         id: "create-1",
-        function: { name: "create_file", arguments: '{"path":"HelloWorld.swift"}' },
+        function: {
+          name: "create_file",
+          arguments: '{"path":"HelloWorld.swift","content":"print(\\"Hello\\")"}',
+        },
       },
     }),
-    '[tool] [start] create_file {"path":"HelloWorld.swift"}',
+    '[tool] [start] create_file {"path":"HelloWorld.swift","content":"print(\\"Hello\\")"}',
   );
   assert.equal(
     formatDebugEvent({
@@ -38,7 +41,10 @@ void test("formats turn debug lines for status, goal, and tools", () => {
       type: "tool_finished",
       call: {
         id: "create-1",
-        function: { name: "create_file", arguments: '{"path":"HelloWorld.swift"}' },
+        function: {
+          name: "create_file",
+          arguments: '{"path":"HelloWorld.swift","content":"print(\\"Hello\\")"}',
+        },
       },
       result: '{"status":"created","path":"HelloWorld.swift"}',
     }),
@@ -101,6 +107,19 @@ void test("redacts credentials and skips noisy events", () => {
         function: {
           name: "create_file",
           arguments: '{"path":".env","content":"FOO=opaque-value"',
+        },
+      },
+    }),
+    "[tool] [start] create_file [omitted secret file]",
+  );
+  assert.equal(
+    formatDebugEvent({
+      type: "tool_started",
+      call: {
+        id: "invalid-secret-target",
+        function: {
+          name: "create_file",
+          arguments: '{"path":123,"content":"FOO=opaque-value"}',
         },
       },
     }),

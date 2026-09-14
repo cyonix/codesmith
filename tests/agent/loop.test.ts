@@ -654,6 +654,40 @@ void test("matches reused tool call IDs to their preceding call when previewing 
   }
 });
 
+void test("omits results when an assistant response reuses a tool call ID", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  await writeFile(path.join(root, "README.md"), "Public file\n");
+  await writeFile(path.join(root, ".env"), "FOO=opaque-value\n");
+  const events: AgentEvent[] = [];
+  const provider = new MockProvider([
+    {
+      toolCalls: [
+        { id: "read-1", function: { name: "read_file", arguments: '{"path":"README.md"}' } },
+        { id: "read-1", function: { name: "read_file", arguments: '{"path":".env"}' } },
+      ],
+    },
+    { content: "I read the files.", toolCalls: [] },
+  ]);
+
+  await new AgentLoop(provider, await ToolExecutor.create(root, true), 12, (event) =>
+    events.push(event),
+  ).run("Read the README and env files.");
+
+  const secondRequest = events.filter((event) => event.type === "provider_request").at(1);
+  assert.equal(secondRequest?.type, "provider_request");
+  if (secondRequest?.type === "provider_request") {
+    const toolPreviews = secondRequest.messages
+      .filter((message) => message.role === "tool")
+      .map((message) => message.preview);
+    assert.deepEqual(toolPreviews, ["[omitted secret file]", "[omitted secret file]"]);
+    assert.equal(
+      secondRequest.messages.some((message) => message.preview.includes("opaque-value")),
+      false,
+    );
+  }
+});
+
 function stateGoalCall(
   id = "goal-1",
   summary = "Create HelloWorld.swift.",

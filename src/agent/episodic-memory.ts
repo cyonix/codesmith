@@ -212,7 +212,7 @@ export class EpisodicMemory {
   async recordTool(call: ToolCall, result: string): Promise<void> {
     if (this.disposed || this.secretAccessedInSubmission) return;
     if (
-      touchesSecretFile(call.function.arguments) ||
+      touchesSecretFile(call.function.name, call.function.arguments) ||
       resultReferencesSecretFile(result) ||
       resultContainsSensitiveDiff(result)
     ) {

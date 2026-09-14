@@ -236,7 +236,10 @@ function providerMessagePreview(
 ): string {
   if (message.role === "tool") {
     const call = findToolCall(messages, messageIndex, message.tool_call_id);
-    if (!call || isSensitiveToolPayload(call.function.arguments, message.content ?? ""))
+    if (
+      !call ||
+      isSensitiveToolPayload(call.function.name, call.function.arguments, message.content ?? "")
+    )
       return omittedSecretPreview;
     return previewSensitiveText(message.content ?? "");
   }
@@ -254,8 +257,9 @@ function findToolCall(
   if (!toolCallId) return undefined;
   for (let index = beforeIndex - 1; index >= 0; index -= 1) {
     const message = messages[index];
-    const match = message.tool_calls?.find((call) => call.id === toolCallId);
-    if (match) return match;
+    if (message.role !== "assistant") continue;
+    const matches = message.tool_calls?.filter((call) => call.id === toolCallId) ?? [];
+    return matches.length === 1 ? matches[0] : undefined;
   }
   return undefined;
 }
