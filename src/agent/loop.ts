@@ -36,6 +36,10 @@ export class AgentLoop {
     private readonly memory?: EpisodicMemory,
   ) {}
 
+  get secretTainted(): boolean {
+    return this.secretAccessedInSubmission;
+  }
+
   async run(prompt: string): Promise<string> {
     this.goals.reset();
     this.secretAccessedInSubmission = false;
