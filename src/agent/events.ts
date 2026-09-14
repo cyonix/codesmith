@@ -13,6 +13,7 @@ export type AgentEvent =
       summary: string;
       completionCriteria: readonly string[];
       replaced: boolean;
+      secretTainted: boolean;
     }
   | { type: "memory_recorded"; episodeId: string; kind: "tool" | "assistant" }
   | {

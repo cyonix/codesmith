@@ -36,6 +36,16 @@ void test("rejects invalid state_goal payloads", () => {
   assert.deepEqual(
     parseStateGoalArguments(
       JSON.stringify({
+        summary: "Create it.",
+        completion_criteria: ["The file exists."],
+        unexpected: true,
+      }),
+    ),
+    { error: "Arguments for state_goal contain unknown properties." },
+  );
+  assert.deepEqual(
+    parseStateGoalArguments(
+      JSON.stringify({
         summary: "x".repeat(maximumGoalSummaryCharacters + 1),
         completion_criteria: ["done"],
       }),

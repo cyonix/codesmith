@@ -10,6 +10,7 @@ void test("formats turn debug lines for status, goal, and tools", () => {
       summary: "Create HelloWorld.swift.",
       completionCriteria: ["HelloWorld.swift exists."],
       replaced: false,
+      secretTainted: false,
     }),
     "[goal] Create HelloWorld.swift. replaced=false tests=1",
   );
@@ -91,6 +92,15 @@ void test("omits model-controlled previews after secret access", () => {
   });
   assert.equal(toolPreview, "[tool] [start] [omitted after secret access]");
   assert.equal(`${providerPreview}\n${toolPreview}`.includes("opaque-value"), false);
+  const goalPreview = formatDebugEvent({
+    type: "goal_stated",
+    summary: "Use FOO=opaque-value.",
+    completionCriteria: ["Complete the secret task."],
+    replaced: false,
+    secretTainted: true,
+  });
+  assert.equal(goalPreview, "[goal] [omitted after secret access] replaced=false tests=1");
+  assert.equal(goalPreview?.includes("opaque-value"), false);
 });
 
 void test("redacts credentials and skips noisy events", () => {

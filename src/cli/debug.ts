@@ -7,6 +7,8 @@ export function formatDebugEvent(event: AgentEvent): string | undefined {
     case "status":
       return `[status] ${event.phase}`;
     case "goal_stated":
+      if (event.secretTainted)
+        return `[goal] [omitted after secret access] replaced=${event.replaced} tests=${event.completionCriteria.length}`;
       return `[goal] ${previewSensitiveText(event.summary)} replaced=${event.replaced} tests=${event.completionCriteria.length}`;
     case "tool_started":
       if (event.secretTainted) return "[tool] [start] [omitted after secret access]";

@@ -625,6 +625,7 @@ void test("taints later tool and provider previews after secret access", async (
     {
       content: "I found FOO=opaque-value.",
       toolCalls: [
+        stateGoalCall("goal-secret", "Use FOO=opaque-value.", ["Find the matching file."]),
         {
           id: "search-secret",
           function: { name: "search_files", arguments: '{"query":"opaque-value"}' },
@@ -657,9 +658,14 @@ void test("taints later tool and provider previews after secret access", async (
     ),
     [true, true],
   );
+  const secretGoalEvent = events.find(
+    (event) => event.type === "goal_stated" && event.summary === "Use FOO=opaque-value.",
+  );
+  assert.equal(secretGoalEvent?.type, "goal_stated");
+  if (secretGoalEvent?.type === "goal_stated") assert.equal(secretGoalEvent.secretTainted, true);
 });
 
-void test("omits previews in a later submission after an assistant receives a secret", async (context) => {
+void test("taints model-controlled events in a later submission after an assistant receives a secret", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
   context.after(async () => rm(root, { recursive: true, force: true }));
   await writeFile(path.join(root, ".env"), "FOO=opaque-value\n");
@@ -671,6 +677,14 @@ void test("omits previews in a later submission after an assistant receives a se
       ],
     },
     { content: "I found FOO=opaque-value.", toolCalls: [] },
+    {
+      toolCalls: [
+        {
+          id: "search-previous-secret",
+          function: { name: "search_files", arguments: '{"query":"opaque-value"}' },
+        },
+      ],
+    },
     { content: "I will make no changes.", toolCalls: [] },
   ]);
   const loop = new AgentLoop(provider, await ToolExecutor.create(root, true), 12, (event) =>
@@ -686,6 +700,19 @@ void test("omits previews in a later submission after an assistant receives a se
     assert.equal(laterSubmissionRequest.secretTainted, true);
     assert.ok(laterSubmissionRequest.messages.every((message) => message.preview === ""));
   }
+  const laterToolEvents = events.filter(
+    (event) =>
+      (event.type === "tool_started" || event.type === "tool_finished") &&
+      event.call.id === "search-previous-secret",
+  );
+  assert.deepEqual(
+    laterToolEvents.map((event) =>
+      event.type === "tool_started" || event.type === "tool_finished"
+        ? event.secretTainted
+        : undefined,
+    ),
+    [true, true],
+  );
 });
 
 void test("matches reused tool call IDs to their preceding call when previewing results", async (context) => {

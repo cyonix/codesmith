@@ -97,6 +97,32 @@ void test("appends logger lines to a file", () => {
   );
 });
 
+void test("escapes a custom log path when a later write fails", () => {
+  const reports: string[] = [];
+  const filePath = "log\u001b[2J\n\u202efailure.log";
+  try {
+    const write = createFileLogWriter(
+      filePath,
+      (message) => {
+        reports.push(message);
+      },
+      {
+        append: () => {
+          throw new Error("disk\u001b[2J\n\u202efull");
+        },
+      },
+    );
+
+    write("debug [status] thinking");
+
+    assert.deepEqual(reports, [
+      "codesmith: Could not write to the log file log\\u001b[2J\\u000a\\u202efailure.log. disk\\u001b[2J\\u000a\\u202efull",
+    ]);
+  } finally {
+    rmSync(filePath, { force: true });
+  }
+});
+
 void test("keeps writes bound to the secured log file after path replacement", () => {
   const directory = mkdtempSync(path.join(os.tmpdir(), "codesmith-log-"));
   const filePath = path.join(directory, "session.log");

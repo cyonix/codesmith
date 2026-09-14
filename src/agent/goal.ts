@@ -78,6 +78,9 @@ export function parseStateGoalArguments(raw: string): { goal: AgentGoal } | { er
     return { error: "Invalid arguments for state_goal." };
   }
   if (!isJsonObject(parsed)) return { error: "Arguments for state_goal must be an object." };
+  if (Object.keys(parsed).some((key) => key !== "summary" && key !== "completion_criteria")) {
+    return { error: "Arguments for state_goal contain unknown properties." };
+  }
 
   const summary = parseBoundedText(
     parsed.summary,

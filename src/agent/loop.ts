@@ -64,13 +64,15 @@ export class AgentLoop {
 
       const providerTools = [stateGoalDefinition, ...this.tools.definitions];
       const providerMessages = this.messagesForProvider(memoryContext, toolRounds === 0);
+      this.secretAccessedInSubmission ||= providerMessages.some((message) =>
+        this.taintedAssistantMessages.has(message),
+      );
       this.emit(
         providerRequestEvent(
           toolRounds,
           providerMessages,
           providerTools.length,
-          this.secretAccessedInSubmission ||
-            providerMessages.some((message) => this.taintedAssistantMessages.has(message)),
+          this.secretAccessedInSubmission,
         ),
       );
       this.assertOpen();
@@ -172,6 +174,7 @@ export class AgentLoop {
       summary: parsed.goal.summary,
       completionCriteria: parsed.goal.completionCriteria,
       replaced: recorded.replaced,
+      secretTainted: this.secretAccessedInSubmission,
     });
     return JSON.stringify({ status: "recorded", replaced: recorded.replaced });
   }

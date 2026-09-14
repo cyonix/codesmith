@@ -97,7 +97,10 @@ export function resolveLogFilePath(
 export function createFileLogWriter(
   filePath: string,
   report: (message: string) => void = (message) => stderr.write(`${message}\n`),
-  options: { ownedDirectory?: string } = {},
+  options: {
+    ownedDirectory?: string;
+    append?: (fd: number, data: string) => void;
+  } = {},
 ): (line: string) => void {
   const directory = path.dirname(filePath);
   const ownedDirectory = options.ownedDirectory ?? defaultLogDirectory();
@@ -115,10 +118,14 @@ export function createFileLogWriter(
       return (line: string) => {
         if (!writable) return;
         try {
-          appendFileSync(fd, `${line}\n`);
+          (options.append ?? appendFileSync)(fd, `${line}\n`);
         } catch (error) {
           writable = false;
-          report(`codesmith: Could not write to the log file ${filePath}. ${errorMessage(error)}`);
+          report(
+            escapeLogLine(
+              `codesmith: Could not write to the log file ${filePath}. ${errorMessage(error)}`,
+            ),
+          );
         }
       };
     } catch (error) {
