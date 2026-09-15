@@ -48,6 +48,21 @@ export function redactSensitiveText(value: string): string {
     );
 }
 
+export const previewMaximumBytes = 4096;
+
 export function previewSensitiveText(value: string): string {
-  return redactSensitiveText(value).replace(/\s+/g, " ").trim();
+  return truncateUtf8(redactSensitiveText(value).replace(/\s+/g, " ").trim(), previewMaximumBytes);
+}
+
+function truncateUtf8(value: string, maximumBytes: number): string {
+  if (Buffer.byteLength(value, "utf8") <= maximumBytes) return value;
+  let bytes = 0;
+  let result = "";
+  for (const character of value) {
+    const size = Buffer.byteLength(character, "utf8");
+    if (bytes + size > maximumBytes) break;
+    bytes += size;
+    result += character;
+  }
+  return result;
 }

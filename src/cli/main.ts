@@ -32,6 +32,7 @@ async function main(): Promise<void> {
   assertLogFileOutsideProject(logFile, options.project);
   const fileLog: FileLogWriter = createFileLogWriter(logFile, undefined, {
     ownedDirectory: logDirectory,
+    projectRoot: options.project,
   });
   let selectionReadline: ReturnType<typeof createInterface> | undefined;
   let readline: ReturnType<typeof createInterface> | undefined;
@@ -148,7 +149,7 @@ Prompts for a model selection and API key at startup.
 All file paths are constrained to --project. Every edit, Git inspection, and detected project command requires confirmation unless --yes is supplied.
 Commands are detected from project manifests and are always executed without a shell.
 --semantic-memory enables local episodic retrieval and asks for one explicit model-download approval.
-Each session writes a debug log outside --project. File logs are supported on macOS only. The default directory is ~/Library/Logs/codesmith. CodeSmith does not delete old log files.`;
+Each session writes a debug log outside --project. File logs are supported on macOS only. The default directory is ~/Library/Logs/codesmith. Previews are limited to 4 KiB. The current session log stops at 16 MiB. CodeSmith does not delete old log files.`;
 if (isEntrypoint(process.argv[1])) {
   void main().catch((error: unknown) => {
     stderr.write(`codesmith: ${error instanceof Error ? error.message : "Unexpected failure."}\n`);

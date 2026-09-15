@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { previewSensitiveText, redactSensitiveText } from "../../src/shared/redaction.js";
+import {
+  previewMaximumBytes,
+  previewSensitiveText,
+  redactSensitiveText,
+} from "../../src/shared/redaction.js";
 
 void test("redacts credentials in conventional environment-variable identifiers", () => {
   const redacted = redactSensitiveText(
@@ -115,4 +119,14 @@ void test("keeps the full redacted text without cutting it short", () => {
   assert.match(preview, /supplied tools/);
   assert.doesNotMatch(preview, /\.\.\.$/);
   assert.ok(preview.length > 200);
+  assert.ok(Buffer.byteLength(preview, "utf8") <= previewMaximumBytes);
+});
+
+void test("truncates previews after redaction to the byte limit", () => {
+  const preview = previewSensitiveText(`use password hunter2, ${"a".repeat(5000)}`);
+
+  assert.doesNotMatch(preview, /hunter2/);
+  assert.match(preview, /\[REDACTED\]/);
+  assert.equal(Buffer.byteLength(preview, "utf8"), previewMaximumBytes);
+  assert.equal(preview.endsWith("a"), true);
 });

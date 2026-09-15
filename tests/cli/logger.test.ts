@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   chmodSync,
   constants,
+  existsSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
@@ -266,6 +267,26 @@ void test("fails closed when O_NOFOLLOW is not available", () => {
   );
 });
 
+void test("stops writing when the session log reaches the maximum size", () => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), "codesmith-log-"));
+  const filePath = path.join(directory, "session.log");
+  const reports: string[] = [];
+  const fileLog = createFileLogWriter(filePath, (message) => reports.push(message), {
+    maximumBytes: 10,
+  });
+  try {
+    fileLog.write("123456789");
+    fileLog.write("123456789");
+
+    assert.equal(readFileSync(filePath, "utf8"), "123456789\n");
+    assert.deepEqual(reports, [
+      `codesmith: Could not write to the log file ${filePath}. The log file reached the maximum size.`,
+    ]);
+  } finally {
+    fileLog.close();
+  }
+});
+
 void test("rejects a log path that is a symlink", { skip: process.platform === "win32" }, () => {
   const directory = mkdtempSync(path.join(os.tmpdir(), "codesmith-log-"));
   const targetPath = path.join(directory, "target.log");
@@ -283,4 +304,66 @@ void test("rejects a log path that is a symlink", { skip: process.platform === "
     },
   );
   assert.equal(readFileSync(targetPath, "utf8"), "target contents\n");
+});
+
+void test(
+  "rejects a log directory that is a symlink",
+  { skip: process.platform === "win32" },
+  () => {
+    const project = mkdtempSync(path.join(os.tmpdir(), "codesmith-project-"));
+    const parent = mkdtempSync(path.join(os.tmpdir(), "codesmith-log-parent-"));
+    const logDirectory = path.join(parent, "codesmith");
+    symlinkSync(project, logDirectory);
+    const filePath = path.join(logDirectory, "session.log");
+
+    assert.throws(
+      () => createFileLogWriter(filePath, () => {}, { projectRoot: project }),
+      (error: unknown) => {
+        assert.ok(error instanceof CodeSmithError);
+        assert.equal(error.kind, "configuration");
+        assert.match(error.message, /symlink/);
+        return true;
+      },
+    );
+    assert.equal(existsSync(path.join(project, "session.log")), false);
+  },
+);
+
+void test(
+  "rejects a parent symlink that resolves inside the project",
+  { skip: process.platform === "win32" },
+  () => {
+    const project = mkdtempSync(path.join(os.tmpdir(), "codesmith-project-"));
+    const outer = mkdtempSync(path.join(os.tmpdir(), "codesmith-log-outer-"));
+    const logsLink = path.join(outer, "Logs");
+    symlinkSync(project, logsLink);
+    const filePath = path.join(logsLink, "codesmith", "session.log");
+
+    assert.throws(
+      () => createFileLogWriter(filePath, () => {}, { projectRoot: project }),
+      (error: unknown) => {
+        assert.ok(error instanceof CodeSmithError);
+        assert.equal(error.kind, "configuration");
+        assert.match(error.message, /inside --project/);
+        return true;
+      },
+    );
+    assert.equal(existsSync(path.join(project, "codesmith", "session.log")), false);
+  },
+);
+
+void test("removes an opened log file that resolves inside the project", () => {
+  const project = mkdtempSync(path.join(os.tmpdir(), "codesmith-project-"));
+  const filePath = path.join(project, "session.log");
+
+  assert.throws(
+    () => createFileLogWriter(filePath, () => {}, { projectRoot: project }),
+    (error: unknown) => {
+      assert.ok(error instanceof CodeSmithError);
+      assert.equal(error.kind, "configuration");
+      assert.match(error.message, /inside --project/);
+      return true;
+    },
+  );
+  assert.equal(existsSync(filePath), false);
 });

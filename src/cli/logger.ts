@@ -4,10 +4,13 @@ import {
   closeSync,
   constants,
   fchmodSync,
+  fstatSync,
   lstatSync,
   mkdirSync,
   openSync,
   realpathSync,
+  statSync,
+  unlinkSync,
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -32,6 +35,8 @@ export interface FileLogWriter {
   write: (line: string) => void;
   close: () => void;
 }
+
+export const sessionLogMaximumBytes = 16 * 1024 * 1024;
 
 export function assertFileLoggingSupported(platform = process.platform): void {
   if (platform !== "darwin") {
@@ -92,24 +97,44 @@ export function createFileLogWriter(
   report: (message: string) => void = (message) => stderr.write(`${message}\n`),
   options: {
     ownedDirectory?: string;
+    projectRoot?: string;
+    maximumBytes?: number;
     append?: (fd: number, data: string) => void;
   } = {},
 ): FileLogWriter {
   const directory = path.dirname(filePath);
+  const maximumBytes = options.maximumBytes ?? sessionLogMaximumBytes;
   try {
+    assertNoSymlinkPathComponents(filePath, options.projectRoot);
     mkdirSync(directory, { recursive: true, mode: 0o700 });
+    assertNoSymlinkPathComponents(filePath, options.projectRoot);
     if (options.ownedDirectory !== undefined)
       secureOwnedDirectory(directory, options.ownedDirectory);
     const { fd, path: logTargetPath } = openExclusiveLogFile(filePath);
     try {
       secureLogFile(fd);
+      if (options.projectRoot !== undefined)
+        assertOpenedLogOutsideProject(fd, logTargetPath, options.projectRoot);
       let writable = true;
       let closed = false;
+      let writtenBytes = 0;
       return {
         write: (line: string): void => {
           if (!writable || closed) return;
+          const payload = `${line}\n`;
+          const size = Buffer.byteLength(payload, "utf8");
+          if (writtenBytes + size > maximumBytes) {
+            writable = false;
+            report(
+              escapeLogLine(
+                `codesmith: Could not write to the log file ${logTargetPath}. The log file reached the maximum size.`,
+              ),
+            );
+            return;
+          }
           try {
-            (options.append ?? appendFileSync)(fd, `${line}\n`);
+            (options.append ?? appendFileSync)(fd, payload);
+            writtenBytes += size;
           } catch (error) {
             writable = false;
             report(
@@ -131,7 +156,11 @@ export function createFileLogWriter(
         },
       };
     } catch (error) {
-      closeSync(fd);
+      try {
+        closeSync(fd);
+      } catch {
+        // The containment check may already have closed this descriptor.
+      }
       throw error;
     }
   } catch (error) {
@@ -161,30 +190,106 @@ function openExclusiveLogFile(filePath: string): { fd: number; path: string } {
     try {
       const stats = lstatSync(candidate);
       if (stats.isSymbolicLink()) {
-        const error = new Error(
-          `Refusing to open symlinked log path: ${candidate}`,
-        ) as NodeJS.ErrnoException;
-        error.code = "ELOOP";
-        throw error;
+        throw new CodeSmithError(
+          "configuration",
+          `Could not create the log file ${escapeLogLine(candidate)}. The log path includes a symlink.`,
+        );
       }
     } catch (error) {
-      const { code } = error as NodeJS.ErrnoException;
-      if (code !== "ENOENT" && code !== undefined) {
-        throw error;
-      }
+      if (error instanceof CodeSmithError) throw error;
+      if (errorCode(error) !== "ENOENT") throw error;
     }
 
     try {
       return { fd: openSync(candidate, logFileOpenFlags(), 0o600), path: candidate };
     } catch (error) {
-      const { code } = error as NodeJS.ErrnoException;
-      if (code !== "EEXIST") throw error;
+      if (errorCode(error) !== "EEXIST") throw error;
       suffix += 1;
       const extension = path.extname(candidate);
       const stem = candidate.slice(0, candidate.length - extension.length);
       candidate = `${stem}-${suffix}${extension}`;
     }
   }
+}
+
+function assertNoSymlinkPathComponents(target: string, projectRoot?: string): void {
+  const resolved = path.resolve(target);
+  const logDirectory = path.dirname(path.resolve(target));
+  const components: string[] = [];
+  let current = resolved;
+  while (true) {
+    components.push(current);
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+
+  for (const component of components.reverse()) {
+    try {
+      if (!lstatSync(component).isSymbolicLink()) continue;
+      const isLogLeaf = component === resolved || component === logDirectory;
+      if (isLogLeaf) {
+        throw new CodeSmithError(
+          "configuration",
+          `Could not create the log file ${escapeLogLine(target)}. The log path includes a symlink.`,
+        );
+      }
+      if (
+        projectRoot !== undefined &&
+        isInsideDirectory(resolveExisting(projectRoot), realpathSync(component))
+      ) {
+        throw new CodeSmithError(
+          "configuration",
+          `Could not create the log file ${escapeLogLine(target)}. The log path is inside --project.`,
+        );
+      }
+    } catch (error) {
+      if (error instanceof CodeSmithError) throw error;
+      if (errorCode(error) === "ENOENT") return;
+      throw error;
+    }
+  }
+}
+
+function assertOpenedLogOutsideProject(
+  fd: number,
+  logTargetPath: string,
+  projectRoot: string,
+): void {
+  const resolved = realpathSync(logTargetPath);
+  const fileStat = fstatSync(fd);
+  const pathStat = statSync(resolved);
+  if (fileStat.dev !== pathStat.dev || fileStat.ino !== pathStat.ino) {
+    throw new CodeSmithError(
+      "configuration",
+      `Could not create the log file ${escapeLogLine(logTargetPath)}. The opened log file does not match its path.`,
+    );
+  }
+  if (!isInsideDirectory(resolveExisting(projectRoot), resolved)) return;
+
+  try {
+    closeSync(fd);
+  } catch {
+    // Unlink still proceeds from the inode snapshot.
+  }
+  try {
+    const current = statSync(resolved);
+    if (current.dev === fileStat.dev && current.ino === fileStat.ino) unlinkSync(resolved);
+  } catch {
+    // Startup still fails closed if cleanup cannot remove the file.
+  }
+  throw new CodeSmithError(
+    "configuration",
+    `Could not create the log file ${escapeLogLine(logTargetPath)}. The log path is inside --project.`,
+  );
+}
+
+function errorCode(error: unknown): string | undefined {
+  if (typeof error === "object" && error !== null && "code" in error) {
+    const code = error.code;
+    return typeof code === "string" ? code : undefined;
+  }
+  return undefined;
 }
 
 function resolveExisting(target: string): string {
