@@ -14,6 +14,7 @@ export function isSensitiveToolPayload(
 
 export function touchesSecretFile(toolName: string, argumentsValue: string): boolean {
   try {
+    if (jsonHasDuplicateKeys(argumentsValue)) return true;
     const parsed: unknown = JSON.parse(argumentsValue);
     return !hasValidPathToolArguments(toolName, parsed) || isSecretToolPath(parsed);
   } catch {
@@ -130,6 +131,170 @@ function hasExactStringFields(
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
+}
+
+function jsonHasDuplicateKeys(text: string): boolean {
+  try {
+    return scanJsonForDuplicateKeys(text);
+  } catch {
+    return true;
+  }
+}
+
+function scanJsonForDuplicateKeys(text: string): boolean {
+  let index = 0;
+
+  const peek = (): string | undefined => text[index];
+
+  const skipWhitespace = (): void => {
+    while (index < text.length) {
+      const character = text[index];
+      if (character !== " " && character !== "\t" && character !== "\n" && character !== "\r")
+        break;
+      index += 1;
+    }
+  };
+
+  const parseString = (): string => {
+    index += 1;
+    let result = "";
+    while (index < text.length) {
+      const character = text[index];
+      if (character === '"') {
+        index += 1;
+        return result;
+      }
+      if (character !== "\\") {
+        result += character;
+        index += 1;
+        continue;
+      }
+      const escaped = text[index + 1];
+      if (escaped === undefined) throw new SyntaxError("Unterminated string.");
+      if (escaped === "u") {
+        const hex = text.slice(index + 2, index + 6);
+        if (!/^[0-9a-fA-F]{4}$/.test(hex)) throw new SyntaxError("Invalid unicode escape.");
+        result += String.fromCharCode(Number.parseInt(hex, 16));
+        index += 6;
+        continue;
+      }
+      result += unescapeJsonCharacter(escaped);
+      index += 2;
+    }
+    throw new SyntaxError("Unterminated string.");
+  };
+
+  const parseObject = (): boolean => {
+    index += 1;
+    skipWhitespace();
+    const keys = new Set<string>();
+    if (peek() === "}") {
+      index += 1;
+      return false;
+    }
+    while (index < text.length) {
+      skipWhitespace();
+      if (peek() !== '"') throw new SyntaxError("Expected property name.");
+      const key = parseString();
+      if (keys.has(key)) return true;
+      keys.add(key);
+      skipWhitespace();
+      if (peek() !== ":") throw new SyntaxError("Expected colon.");
+      index += 1;
+      if (parseValue()) return true;
+      skipWhitespace();
+      if (peek() === ",") {
+        index += 1;
+        continue;
+      }
+      if (peek() === "}") {
+        index += 1;
+        return false;
+      }
+      throw new SyntaxError("Expected comma or closing brace.");
+    }
+    throw new SyntaxError("Unterminated object.");
+  };
+
+  const parseArray = (): boolean => {
+    index += 1;
+    skipWhitespace();
+    if (peek() === "]") {
+      index += 1;
+      return false;
+    }
+    while (index < text.length) {
+      if (parseValue()) return true;
+      skipWhitespace();
+      if (peek() === ",") {
+        index += 1;
+        continue;
+      }
+      if (peek() === "]") {
+        index += 1;
+        return false;
+      }
+      throw new SyntaxError("Expected comma or closing bracket.");
+    }
+    throw new SyntaxError("Unterminated array.");
+  };
+
+  const parseLiteralOrNumber = (): void => {
+    if (text.startsWith("true", index)) {
+      index += 4;
+      return;
+    }
+    if (text.startsWith("false", index)) {
+      index += 5;
+      return;
+    }
+    if (text.startsWith("null", index)) {
+      index += 4;
+      return;
+    }
+    const match = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/.exec(text.slice(index));
+    if (match === null) throw new SyntaxError("Invalid value.");
+    index += match[0].length;
+  };
+
+  const parseValue = (): boolean => {
+    skipWhitespace();
+    const character = peek();
+    if (character === "{") return parseObject();
+    if (character === "[") return parseArray();
+    if (character === '"') {
+      parseString();
+      return false;
+    }
+    parseLiteralOrNumber();
+    return false;
+  };
+
+  const duplicate = parseValue();
+  skipWhitespace();
+  if (index !== text.length) throw new SyntaxError("Unexpected trailing data.");
+  return duplicate;
+}
+
+function unescapeJsonCharacter(escaped: string): string {
+  switch (escaped) {
+    case '"':
+    case "\\":
+    case "/":
+      return escaped;
+    case "b":
+      return "\b";
+    case "f":
+      return "\f";
+    case "n":
+      return "\n";
+    case "r":
+      return "\r";
+    case "t":
+      return "\t";
+    default:
+      throw new SyntaxError("Invalid escape.");
+  }
 }
 
 function isSecretPath(value: string): boolean {

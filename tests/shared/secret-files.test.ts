@@ -54,6 +54,27 @@ void test("treats unknown and schema-invalid tool payloads as sensitive", () => 
   }
 });
 
+void test("treats duplicate JSON object keys as sensitive", () => {
+  assert.equal(
+    touchesSecretFile(
+      "create_file",
+      '{"path":"note.txt","content":"opaque-secret","content":"safe"}',
+    ),
+    true,
+  );
+  assert.equal(
+    touchesSecretFile(
+      "create_file",
+      '{"path":"note.txt","content":"opaque-secret","\\u0063ontent":"safe"}',
+    ),
+    true,
+  );
+  assert.equal(
+    touchesSecretFile("create_file", JSON.stringify({ path: "note.txt", content: "note" })),
+    false,
+  );
+});
+
 void test("detects conventional secret paths without fail-closed logging rules", () => {
   assert.equal(argumentsReferenceSecretPath('{"path":".env.production"}'), true);
   assert.equal(argumentsReferenceSecretPath('{"path":"README.md"}'), false);

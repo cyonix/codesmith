@@ -172,6 +172,19 @@ void test("redacts credentials and omits secret-file payloads", () => {
   );
   assert.equal(
     formatDebugEvent({
+      type: "tool_started",
+      call: {
+        id: "duplicate-content",
+        function: {
+          name: "create_file",
+          arguments: '{"path":"note.txt","content":"opaque-secret","content":"safe"}',
+        },
+      },
+    }),
+    "[tool_started] create_file [omitted secret file]",
+  );
+  assert.equal(
+    formatDebugEvent({
       type: "tool_finished",
       call: {
         id: "read-env",
