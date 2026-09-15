@@ -188,4 +188,20 @@ void test("redacts credentials and omits secret-file payloads", () => {
     }),
     "[assistant_text] The API key [REDACTED]",
   );
+  for (const type of ["tool_proposed", "tool_started"] as const) {
+    const line = formatDebugEvent({
+      type,
+      call: {
+        id: "create-config",
+        function: {
+          name: "create_file",
+          arguments: '{"path":"app.ts","content":"DATABASE_URL=opaque-value"}',
+        },
+      },
+    });
+    assert.match(line, new RegExp(`^\\[${type}\\] create_file `));
+    assert.match(line, /\[REDACTED\]/);
+    assert.doesNotMatch(line, /opaque-value/);
+    assert.doesNotMatch(line, /omitted secret file/);
+  }
 });

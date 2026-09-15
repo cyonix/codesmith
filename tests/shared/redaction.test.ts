@@ -8,7 +8,7 @@ import {
 
 void test("redacts credentials in conventional environment-variable identifiers", () => {
   const redacted = redactSensitiveText(
-    "DB_PASSWORD=hunter2 AWS_SECRET_ACCESS_KEY=abcd MY_API_TOKEN: abc.def-123",
+    "DB_PASSWORD=hunter2 AWS_SECRET_ACCESS_KEY=abcd MY_API_TOKEN: abc.def-123 DATABASE_URL=opaque-value",
   );
 
   assert.doesNotMatch(
@@ -16,12 +16,25 @@ void test("redacts credentials in conventional environment-variable identifiers"
     /hunter2|abcd|abc\.def-123|PASSWORD=|SECRET_ACCESS_KEY=|API_TOKEN:/,
   );
   assert.match(redacted, /\[REDACTED\]/);
+  assert.doesNotMatch(redacted, /opaque-value/);
+});
+
+void test("redacts database URL assignments and fields", () => {
+  assert.doesNotMatch(redactSensitiveText("DATABASE_URL=opaque-value"), /opaque-value/);
+  assert.equal(
+    redactSensitiveText('{"database_url":"opaque-value"}'),
+    '{"database_url":"[REDACTED]"}',
+  );
+  assert.doesNotMatch(
+    previewSensitiveText('{"path":"app.ts","content":"DATABASE_URL=opaque-value"}'),
+    /opaque-value/,
+  );
 });
 
 void test("redacts JSON credential fields without removing surrounding syntax", () => {
   assert.equal(
-    redactSensitiveText('{"api_key":"private-value","name":"safe"}'),
-    '{"api_key":"[REDACTED]","name":"safe"}',
+    redactSensitiveText('{"api_key":"private-value","database_url":"opaque-value","name":"safe"}'),
+    '{"api_key":"[REDACTED]","database_url":"[REDACTED]","name":"safe"}',
   );
 });
 
@@ -70,7 +83,7 @@ void test("redacts credential fields nested in JSON tool results", () => {
 
 void test("redacts URL-userinfo credentials in tool results", () => {
   const redacted = redactSensitiveText(
-    JSON.stringify({ content: "DATABASE_URL=postgres://user:password@host/db" }),
+    JSON.stringify({ content: "postgres://user:password@host/db" }),
   );
 
   assert.doesNotMatch(redacted, /user:password/);
