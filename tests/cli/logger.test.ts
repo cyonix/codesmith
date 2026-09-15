@@ -29,15 +29,18 @@ void test("writes debug lines and escapes terminal controls", () => {
   const lines: string[] = [];
   const logger = createLogger({ write: (line) => lines.push(line) });
 
-  logger.debug("prompt\u001b[2J\u009b2J\u202eend");
+  logger.debug("prompt\u001b[2J\u009b2J\u2028\u2029\u202eend");
   logger.debug("first\nsecond");
 
   assert.deepEqual(lines, [
-    "debug prompt\\u001b[2J\\u009b2J\\u202eend",
+    "debug prompt\\u001b[2J\\u009b2J\\u2028\\u2029\\u202eend",
     "debug first",
     "debug second",
   ]);
-  assert.doesNotMatch(lines[0] ?? "", new RegExp(`[${String.fromCodePoint(0x1b, 0x9b, 0x202e)}]`));
+  assert.doesNotMatch(
+    lines[0] ?? "",
+    new RegExp(`[${String.fromCodePoint(0x1b, 0x9b, 0x2028, 0x2029, 0x202e)}]`),
+  );
 });
 
 void test("selects the macOS log directory outside the project", () => {
