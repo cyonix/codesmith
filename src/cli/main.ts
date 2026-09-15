@@ -5,6 +5,16 @@ import { stderr, stdin, stdout } from "node:process";
 import { pathToFileURL } from "node:url";
 import { AgentSession } from "../agent/session.js";
 import type { AgentEvent } from "../agent/events.js";
+import { formatDebugEvent } from "./debug.js";
+import {
+  assertFileLoggingSupported,
+  assertLogFileOutsideProject,
+  createFileLogWriter,
+  createLogger,
+  defaultLogDirectory,
+  defaultLogFilePath,
+  type FileLogWriter,
+} from "./logger.js";
 import { promptForApiKey, selectModel } from "./setup.js";
 import { CodeSmithError } from "../shared/errors.js";
 import { ModelProvider } from "../providers/provider.js";
@@ -16,13 +26,25 @@ async function main(): Promise<void> {
     return;
   }
 
-  const selectionReadline = createInterface({ input: stdin, output: stdout });
+  assertFileLoggingSupported();
+  const logDirectory = defaultLogDirectory();
+  const logFile = defaultLogFilePath({ directory: logDirectory });
+  assertLogFileOutsideProject(logFile, options.project);
+  const fileLog: FileLogWriter = createFileLogWriter(logFile, undefined, {
+    ownedDirectory: logDirectory,
+    projectRoot: options.project,
+  });
+  let selectionReadline: ReturnType<typeof createInterface> | undefined;
   let readline: ReturnType<typeof createInterface> | undefined;
   let session: AgentSession | undefined;
 
   try {
+    const logger = createLogger({ write: fileLog.write });
+
+    const modelSelection = createInterface({ input: stdin, output: stdout });
+    selectionReadline = modelSelection;
     const model = await selectModel(
-      (prompt) => selectionReadline.question(prompt),
+      (prompt) => modelSelection.question(prompt),
       (output) => stdout.write(output),
     );
 
@@ -42,6 +64,7 @@ async function main(): Promise<void> {
     session = activeSession;
 
     activeSession.subscribe((event) => {
+      logger.debug(formatDebugEvent(event));
       void handleEvent(event, activeSession, commandReadline);
     });
     stdout.write(`CodeSmith is ready for ${options.project}. Type /exit to quit.\n`);
@@ -61,8 +84,9 @@ async function main(): Promise<void> {
     }
   } finally {
     session?.close();
+    fileLog.close();
     readline?.close();
-    selectionReadline.close();
+    selectionReadline?.close();
   }
 }
 
@@ -124,7 +148,8 @@ Usage: codesmith --project <directory> [--yes] [--semantic-memory]
 Prompts for a model selection and API key at startup.
 All file paths are constrained to --project. Every edit, Git inspection, and detected project command requires confirmation unless --yes is supplied.
 Commands are detected from project manifests and are always executed without a shell.
---semantic-memory enables local episodic retrieval and asks for one explicit model-download approval.`;
+--semantic-memory enables local episodic retrieval and asks for one explicit model-download approval.
+Each session writes a debug log outside --project. File logs are supported on macOS only. The default directory is ~/Library/Logs/codesmith. Previews are limited to 4 KiB. The current session log stops at 16 MiB. CodeSmith does not delete old log files.`;
 if (isEntrypoint(process.argv[1])) {
   void main().catch((error: unknown) => {
     stderr.write(`codesmith: ${error instanceof Error ? error.message : "Unexpected failure."}\n`);

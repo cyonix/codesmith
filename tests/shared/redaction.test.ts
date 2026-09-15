@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { redactSensitiveText } from "../../src/shared/redaction.js";
+import {
+  previewMaximumBytes,
+  previewSensitiveText,
+  redactSensitiveText,
+} from "../../src/shared/redaction.js";
 
 void test("redacts credentials in conventional environment-variable identifiers", () => {
   const redacted = redactSensitiveText(
-    "DB_PASSWORD=hunter2 AWS_SECRET_ACCESS_KEY=abcd MY_API_TOKEN: abc.def-123",
+    "DB_PASSWORD=hunter2 AWS_SECRET_ACCESS_KEY=abcd MY_API_TOKEN: abc.def-123 DATABASE_URL=opaque-value",
   );
 
   assert.doesNotMatch(
@@ -12,12 +16,25 @@ void test("redacts credentials in conventional environment-variable identifiers"
     /hunter2|abcd|abc\.def-123|PASSWORD=|SECRET_ACCESS_KEY=|API_TOKEN:/,
   );
   assert.match(redacted, /\[REDACTED\]/);
+  assert.doesNotMatch(redacted, /opaque-value/);
+});
+
+void test("redacts database URL assignments and fields", () => {
+  assert.doesNotMatch(redactSensitiveText("DATABASE_URL=opaque-value"), /opaque-value/);
+  assert.equal(
+    redactSensitiveText('{"database_url":"opaque-value"}'),
+    '{"database_url":"[REDACTED]"}',
+  );
+  assert.doesNotMatch(
+    previewSensitiveText('{"path":"app.ts","content":"DATABASE_URL=opaque-value"}'),
+    /opaque-value/,
+  );
 });
 
 void test("redacts JSON credential fields without removing surrounding syntax", () => {
   assert.equal(
-    redactSensitiveText('{"api_key":"private-value","name":"safe"}'),
-    '{"api_key":"[REDACTED]","name":"safe"}',
+    redactSensitiveText('{"api_key":"private-value","database_url":"opaque-value","name":"safe"}'),
+    '{"api_key":"[REDACTED]","database_url":"[REDACTED]","name":"safe"}',
   );
 });
 
@@ -53,15 +70,20 @@ void test("redacts complete unquoted credential values with commas", () => {
 });
 
 void test("redacts credential fields nested in JSON tool results", () => {
-  const redacted = redactSensitiveText(JSON.stringify({ content: '{"api_key":"private-value"}' }));
+  for (const value of [
+    JSON.stringify({ content: '{"api_key":"private-value"}' }),
+    JSON.stringify({ content: '{"api_key":"abc\\"def"}' }),
+  ]) {
+    const redacted = redactSensitiveText(value);
 
-  assert.doesNotMatch(redacted, /private-value/);
-  assert.deepEqual(JSON.parse(redacted), { content: '{"api_key":"[REDACTED]"}' });
+    assert.doesNotMatch(redacted, /private-value|abc\\"def/);
+    assert.deepEqual(JSON.parse(redacted), { content: '{"api_key":"[REDACTED]"}' });
+  }
 });
 
 void test("redacts URL-userinfo credentials in tool results", () => {
   const redacted = redactSensitiveText(
-    JSON.stringify({ content: "DATABASE_URL=postgres://user:password@host/db" }),
+    JSON.stringify({ content: "postgres://user:password@host/db" }),
   );
 
   assert.doesNotMatch(redacted, /user:password/);
@@ -80,4 +102,44 @@ void test("redacts truncated private-key blocks", () => {
   const redacted = redactSensitiveText("-----BEGIN PRIVATE KEY-----\nprivate key material");
 
   assert.equal(redacted, "[REDACTED PRIVATE KEY]");
+});
+
+void test("redacts JSON credential fields with spaced keys", () => {
+  assert.equal(
+    redactSensitiveText(
+      '{"API key":"private-value","private key":"private-material","name":"safe"}',
+    ),
+    '{"API key":"[REDACTED]","private key":"[REDACTED]","name":"safe"}',
+  );
+});
+
+void test("redacts credentials in natural-language previews", () => {
+  const preview = previewSensitiveText(
+    'use password hunter2, password is: hunter2, API key: private-value, API key = "other-private-value", and my API key equals: "private-value"; the token equals abc.def-123',
+  );
+
+  assert.equal(
+    preview,
+    "use password [REDACTED], password [REDACTED], API key [REDACTED], API key [REDACTED], and my API key [REDACTED]; the token [REDACTED]",
+  );
+  assert.doesNotMatch(preview, /hunter2|private-value|other-private-value|abc\.def-123/);
+});
+
+void test("keeps the full redacted text without cutting it short", () => {
+  const prompt = `You are CodeSmith, a local coding assistant. ${"Work only through the supplied tools. ".repeat(20)}`;
+  const preview = previewSensitiveText(prompt);
+
+  assert.match(preview, /supplied tools/);
+  assert.doesNotMatch(preview, /\.\.\.$/);
+  assert.ok(preview.length > 200);
+  assert.ok(Buffer.byteLength(preview, "utf8") <= previewMaximumBytes);
+});
+
+void test("truncates previews after redaction to the byte limit", () => {
+  const preview = previewSensitiveText(`use password hunter2, ${"a".repeat(5000)}`);
+
+  assert.doesNotMatch(preview, /hunter2/);
+  assert.match(preview, /\[REDACTED\]/);
+  assert.equal(Buffer.byteLength(preview, "utf8"), previewMaximumBytes);
+  assert.equal(preview.endsWith("a"), true);
 });

@@ -72,6 +72,19 @@ reviewed model; session episodes are discarded when the session closes. Enter
 
 To end the session, enter `/exit` or `/quit`.
 
+### Debug logs
+
+Each CLI session writes a debug log outside the selected project. File logs are
+supported on macOS only. Other platforms stop at startup. The default directory
+is `~/Library/Logs/codesmith`. The directory uses owner-only permissions
+(`0700`). Each log file uses owner-only permissions (`0600`). Startup fails if
+the log path is inside `--project` or if the log directory or file is a symlink.
+
+The log records redacted agent events and model-request previews. Each preview
+is limited to 4 KiB. The current session log stops at 16 MiB. It omits
+payloads from conventional secret files. CodeSmith does not delete old log
+files. Manage retention in that directory yourself.
+
 ## Documentation
 
 Read [ARCHITECTURE.md](ARCHITECTURE.md) for the Agent Core API, system design,

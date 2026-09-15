@@ -40,4 +40,8 @@ void test("parses semantic-memory opt-in separately from auto-approval", () => {
     () => parseOptions(["--project", "/workspace", "--semantic-memory-threshold", "0.4"]),
     /Unknown option/,
   );
+  assert.throws(
+    () => parseOptions(["--project", "/workspace", "--log-file", "-"]),
+    /Unknown option/,
+  );
 });

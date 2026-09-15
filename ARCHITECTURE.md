@@ -205,6 +205,12 @@ Google's retention terms before you choose a Gemini model.
 | `memory_cleared`     | Episodic-memory records were discarded                         |
 | `memory_failed`      | Local memory initialization, retrieval, or recording failed    |
 | `error`              | The session or provider failed                                 |
+| `provider_request`   | A redacted preview of the messages sent to the model           |
+
+`provider_request` previews redact credential-shaped text. They omit tool
+payloads that read or mention conventional secret files, malformed tool
+arguments, unknown tools, and `run_command` payloads. The event does not
+include raw secrets from those sources.
 
 Agent Core does not read terminal input or render a user interface. The CLI
 uses `readline` for approval requests. A GUI can show the same events as chat
@@ -351,6 +357,19 @@ servers; review Google's retention terms before selecting a Gemini model.
   groups.
 - Provider credentials stay in the provider client. Provider error diagnostics
   are limited and redact configured and token-shaped credentials.
+- The CLI writes one debug log file for each session outside `--project` on
+  macOS only. Other platforms stop at startup. Startup also fails if the log
+  path is inside `--project` or if the log directory or file is a symlink.
+  A parent symlink that resolves inside `--project` also fails. After
+  exclusive create, the logger checks the opened file identity and removes it
+  if that identity is inside `--project`. The directory mode is `0700` and the
+  file mode is `0600`. The logger keeps one append descriptor and closes it
+  when the session ends. A create failure stops startup. A later write failure
+  is reported once to stderr, and the session continues. Each logged preview is
+  limited to 4 KiB after redaction. The current session log stops writing at 16
+  MiB and reports that once. CodeSmith does not delete old log files. Log lines
+  are sanitized tagged text. They include redacted event text and omit
+  secret-file tool payloads. Approval events log the kind only.
 
 ## 9. Development and testing
 
