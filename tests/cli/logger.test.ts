@@ -4,6 +4,7 @@ import {
   constants,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -125,6 +126,28 @@ void test("appends logger lines to a file and closes the descriptor", () => {
   );
 });
 
+void test("creates a fresh log file when the default name already exists", () => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), "codesmith-log-"));
+  const filePath = path.join(directory, "session.log");
+  writeFileSync(filePath, "existing\n");
+
+  const fileLog = createFileLogWriter(filePath);
+  try {
+    fileLog.write("debug [status] fresh");
+    const names = readdirSync(directory).sort();
+    const created = names.filter((name) => name.endsWith(".log") && name !== "session.log");
+
+    assert.equal(created.length, 1);
+    assert.equal(readFileSync(filePath, "utf8"), "existing\n");
+    assert.equal(
+      readFileSync(path.join(directory, created[0] ?? ""), "utf8"),
+      "debug [status] fresh\n",
+    );
+  } finally {
+    fileLog.close();
+  }
+});
+
 void test("escapes a log path when a later write fails and reports once", () => {
   const reports: string[] = [];
   const filePath = "log\u001b[2J\n\u202efailure.log";
@@ -181,7 +204,12 @@ void test("tightens an existing log file and owned directory permissions", () =>
   fileLog.close();
 
   if (process.platform !== "win32") {
-    assert.equal(statSync(filePath).mode & 0o777, 0o600);
+    const names = readdirSync(owned).sort();
+    const created = names.filter((name) => name.endsWith(".log") && name !== "session.log");
+
+    assert.equal(created.length, 1);
+    assert.equal(statSync(filePath).mode & 0o777, 0o644);
+    assert.equal(statSync(path.join(owned, created[0] ?? "")).mode & 0o777, 0o600);
     assert.equal(statSync(owned).mode & 0o777, 0o700);
   }
 });
@@ -228,6 +256,7 @@ void test("fails closed when O_NOFOLLOW is not available", () => {
         O_WRONLY: constants.O_WRONLY,
         O_CREAT: constants.O_CREAT,
         O_APPEND: constants.O_APPEND,
+        O_EXCL: constants.O_EXCL,
       }),
     (error: unknown) => {
       assert.ok(error instanceof Error);

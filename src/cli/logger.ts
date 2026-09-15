@@ -4,6 +4,7 @@ import {
   closeSync,
   constants,
   fchmodSync,
+  lstatSync,
   mkdirSync,
   openSync,
   realpathSync,
@@ -59,13 +60,20 @@ export function logFileOpenFlags(
     O_WRONLY: number;
     O_CREAT: number;
     O_APPEND: number;
+    O_EXCL: number;
     O_NOFOLLOW?: number;
   } = constants,
 ): number {
   if (typeof fsConstants.O_NOFOLLOW !== "number") {
     throw new Error("O_NOFOLLOW is not available.");
   }
-  return fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_APPEND | fsConstants.O_NOFOLLOW;
+  return (
+    fsConstants.O_WRONLY |
+    fsConstants.O_CREAT |
+    fsConstants.O_EXCL |
+    fsConstants.O_APPEND |
+    fsConstants.O_NOFOLLOW
+  );
 }
 
 export function defaultLogFilePath(options: LogPathOptions = {}): string {
@@ -92,7 +100,7 @@ export function createFileLogWriter(
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     if (options.ownedDirectory !== undefined)
       secureOwnedDirectory(directory, options.ownedDirectory);
-    const fd = openSync(filePath, logFileOpenFlags(), 0o600);
+    const { fd, path: logTargetPath } = openExclusiveLogFile(filePath);
     try {
       secureLogFile(fd);
       let writable = true;
@@ -106,7 +114,7 @@ export function createFileLogWriter(
             writable = false;
             report(
               escapeLogLine(
-                `codesmith: Could not write to the log file ${filePath}. ${errorMessage(error)}`,
+                `codesmith: Could not write to the log file ${logTargetPath}. ${errorMessage(error)}`,
               ),
             );
           }
@@ -143,6 +151,40 @@ export function createLogger(options: LoggerOptions = {}): Logger {
       for (const line of message.split("\n")) write(`debug ${escapeLogLine(line)}`);
     },
   };
+}
+
+function openExclusiveLogFile(filePath: string): { fd: number; path: string } {
+  let candidate = filePath;
+  let suffix = 0;
+
+  while (true) {
+    try {
+      const stats = lstatSync(candidate);
+      if (stats.isSymbolicLink()) {
+        const error = new Error(
+          `Refusing to open symlinked log path: ${candidate}`,
+        ) as NodeJS.ErrnoException;
+        error.code = "ELOOP";
+        throw error;
+      }
+    } catch (error) {
+      const { code } = error as NodeJS.ErrnoException;
+      if (code !== "ENOENT" && code !== undefined) {
+        throw error;
+      }
+    }
+
+    try {
+      return { fd: openSync(candidate, logFileOpenFlags(), 0o600), path: candidate };
+    } catch (error) {
+      const { code } = error as NodeJS.ErrnoException;
+      if (code !== "EEXIST") throw error;
+      suffix += 1;
+      const extension = path.extname(candidate);
+      const stem = candidate.slice(0, candidate.length - extension.length);
+      candidate = `${stem}-${suffix}${extension}`;
+    }
+  }
 }
 
 function resolveExisting(target: string): string {
