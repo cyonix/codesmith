@@ -12,7 +12,12 @@ import {
   type MemoryEventSink,
 } from "../../src/agent/episodic-memory.js";
 import { ToolExecutor } from "../../src/workspace/tools.js";
-import type { AssistantResponse, ChatMessage, ChatProvider } from "../../src/shared/types.js";
+import type {
+  AssistantResponse,
+  ChatMessage,
+  ChatProvider,
+  ToolDefinition,
+} from "../../src/shared/types.js";
 
 void test("tool loop reads a file using a mocked provider", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
@@ -36,6 +41,122 @@ void test("tool loop reads a file using a mocked provider", async (context) => {
       .some(
         (message) => message.role === "tool" && message.content?.includes("Hello from TypeScript"),
       ),
+  );
+});
+void test("requires and emits a bounded task contract before workspace work", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const events: AgentEvent[] = [];
+  const provider = new MockProvider(
+    [{ toolCalls: [taskDeclarationCall()] }, { content: "Completed.", toolCalls: [] }],
+    false,
+  );
+
+  const result = await new AgentLoop(provider, await ToolExecutor.create(root, true), 12, (event) =>
+    events.push(event),
+  ).run("Inspect the project.");
+
+  assert.equal(result, "Completed.");
+  assert.equal(provider.requestedTools[0]?.length, 1);
+  assert.equal(provider.requestedTools[0]?.[0]?.function.name, "declare_task");
+  assert.ok((provider.requestedTools[1]?.length ?? 0) > 1);
+  const declaration = events.find((event) => event.type === "task_declared");
+  assert.equal(declaration?.type, "task_declared");
+  if (declaration?.type === "task_declared") {
+    assert.equal(declaration.contract.goal, "Complete the requested test task.");
+    assert.deepEqual(declaration.contract.completionCriteria, [
+      "The requested result is returned.",
+    ]);
+    assert.match(declaration.contract.taskId, /^[0-9a-f-]{36}$/);
+  }
+});
+void test("retries a missing task declaration with protocol-safe feedback", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const provider = new MockProvider(
+    [
+      { content: "I will inspect the project.", toolCalls: [] },
+      { toolCalls: [taskDeclarationCall()] },
+      { content: "Completed.", toolCalls: [] },
+    ],
+    false,
+  );
+
+  const result = await new AgentLoop(provider, await ToolExecutor.create(root, true)).run(
+    "Inspect the project.",
+  );
+
+  assert.equal(result, "Completed.");
+  assert.ok(
+    provider.messages[1]?.some(
+      (message) =>
+        message.role === "user" &&
+        message.content?.includes("Task declaration is required before any answer"),
+    ),
+  );
+  assert.equal(provider.acceptedCompletions, 3);
+});
+void test("does not execute mixed declaration and workspace calls", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const events: AgentEvent[] = [];
+  const provider = new MockProvider(
+    [
+      {
+        toolCalls: [
+          {
+            id: "read-1",
+            function: { name: "read_file", arguments: '{"path":"README.md"}' },
+          },
+          taskDeclarationCall(),
+        ],
+      },
+      { content: "I could not declare the task.", toolCalls: [] },
+    ],
+    false,
+  );
+
+  const loop = new AgentLoop(provider, await ToolExecutor.create(root, true), 12, (event) =>
+    events.push(event),
+  );
+  await assert.rejects(
+    () => loop.run("Inspect the project."),
+    /could not declare a valid task contract/,
+  );
+  assert.equal(
+    events.some((event) => event.type === "tool_proposed"),
+    false,
+  );
+  assert.ok(provider.messages[1]?.filter((message) => message.role === "tool").length === 2);
+});
+void test("rejects a later task declaration without workspace lifecycle events", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const events: AgentEvent[] = [];
+  const provider = new MockProvider(
+    [
+      { toolCalls: [taskDeclarationCall()] },
+      { toolCalls: [taskDeclarationCall("second")] },
+      { content: "Completed.", toolCalls: [] },
+    ],
+    false,
+  );
+
+  const result = await new AgentLoop(provider, await ToolExecutor.create(root, true), 12, (event) =>
+    events.push(event),
+  ).run("Inspect the project.");
+
+  assert.equal(result, "Completed.");
+  assert.equal(events.filter((event) => event.type === "task_declared").length, 1);
+  assert.equal(
+    events.some((event) => event.type === "tool_proposed"),
+    false,
+  );
+  assert.ok(
+    provider.messages[2]?.some(
+      (message) =>
+        message.role === "tool" && message.content?.includes("immutable for this submission"),
+    ),
   );
 });
 void test("tool loop retains prior prompts and creates the first project file", async (context) => {
@@ -67,8 +188,10 @@ void test("tool loop retains prior prompts and creates the first project file", 
     'print("Hello, World!")\n',
   );
   assert.ok(
-    provider.messages[1].some(
-      (message) => message.role === "user" && message.content?.includes("standalone hello world"),
+    provider.messages.some((messages) =>
+      messages.some(
+        (message) => message.role === "user" && message.content?.includes("standalone hello world"),
+      ),
     ),
   );
 });
@@ -100,20 +223,21 @@ void test("tool loop interprets yes as confirmation of the preceding file-remova
   assert.equal(result, "Removed HelloWorld.swift.");
   await assert.rejects(() => readFile(path.join(root, "HelloWorld.swift")));
   assert.equal(await readFile(path.join(root, "PrintPrimes.swift"), "utf8"), "print([2, 3, 5])\n");
+  const confirmationRequest = provider.messages.find((messages) =>
+    messages.some((message) => message.role === "user" && message.content === "yes"),
+  );
+  assert.ok(confirmationRequest);
   assert.ok(
-    provider.messages[1].some(
+    confirmationRequest.some(
       (message) =>
         message.role === "system" && message.content?.includes("brief reply such as 'yes'"),
     ),
   );
   assert.ok(
-    provider.messages[1].some(
+    confirmationRequest.some(
       (message) =>
         message.role === "assistant" && message.content?.includes("remove HelloWorld.swift"),
     ),
-  );
-  assert.ok(
-    provider.messages[1].some((message) => message.role === "user" && message.content === "yes"),
   );
 });
 void test("tool loop reserves context for a full tool run after prior turns", async (context) => {
@@ -144,7 +268,7 @@ void test("does not accept a provider completion rejected by tool-call limits", 
     id: `call-${index}`,
     function: { name: "list_files", arguments: "{}" },
   }));
-  const provider = new MockProvider([{ toolCalls }]);
+  const provider = new MockProvider([{ toolCalls }], false);
   const loop = new AgentLoop(provider, await ToolExecutor.create(root, true));
 
   await assert.rejects(
@@ -180,21 +304,20 @@ void test("supplies retrieved memory as untrusted data only for the initial tool
 
   await loop.run("Inspect the project.");
 
-  const initialMessages = provider.messages[0] ?? [];
+  const initialMessages = provider.messages[1] ?? [];
   const retrievedIndex = initialMessages.findIndex(
     (message) => message.role === "user" && message.content?.includes("Retrieved episodic data"),
   );
   const promptIndex = initialMessages.findIndex(
     (message) => message.role === "user" && message.content === "Inspect the project.",
   );
-  assert.ok(retrievedIndex > 0);
-  assert.ok(promptIndex > retrievedIndex);
+  assert.ok(retrievedIndex > promptIndex);
   assert.match(
     initialMessages[retrievedIndex - 1]?.content ?? "",
     /untrusted retrieved historical data/,
   );
   assert.equal(
-    provider.messages[1]?.some((message) => message.content?.includes("Retrieved episodic data")),
+    provider.messages[2]?.some((message) => message.content?.includes("Retrieved episodic data")),
     false,
   );
 });
@@ -233,7 +356,7 @@ void test("retrieves prior failed tool outcomes and final decisions", async (con
   await loop.run("Read missing.md.");
   await loop.run("What happened, and what did you decide?");
 
-  const retrieved = provider.messages[2]?.find((message) =>
+  const retrieved = provider.messages[4]?.find((message) =>
     message.content?.includes("Retrieved episodic data"),
   )?.content;
   assert.match(retrieved ?? "", /Tool: read_file/);
@@ -251,7 +374,7 @@ void test("emits redacted provider-request previews before each completion", asy
     events.push(event),
   ).run("Create HelloWorld.swift.");
 
-  const request = events.find((event) => event.type === "provider_request");
+  const request = events.find((event) => event.type === "provider_request" && event.toolCount > 1);
   assert.equal(request?.type, "provider_request");
   if (request?.type === "provider_request") {
     assert.equal(request.round, 0);
@@ -280,7 +403,7 @@ void test("omits secret-file tool content from later provider request previews",
     events.push(event),
   ).run("Read the env file.");
 
-  const secondRequest = events.filter((event) => event.type === "provider_request").at(1);
+  const secondRequest = events.filter((event) => event.type === "provider_request").at(-1);
   assert.equal(secondRequest?.type, "provider_request");
   if (secondRequest?.type === "provider_request") {
     const toolPreview = secondRequest.messages.find((message) => message.role === "tool")?.preview;
@@ -351,24 +474,45 @@ void test("omits results when an assistant response reuses a tool call ID", asyn
     events.push(event),
   ).run("Read the README and env files.");
 
-  const secondRequest = events.filter((event) => event.type === "provider_request").at(1);
+  const secondRequest = events.filter((event) => event.type === "provider_request").at(-1);
   assert.equal(secondRequest?.type, "provider_request");
   if (secondRequest?.type === "provider_request") {
     const toolPreviews = secondRequest.messages
       .filter((message) => message.role === "tool")
       .map((message) => message.preview);
-    assert.deepEqual(toolPreviews, ["[omitted secret file]", "[omitted secret file]"]);
+    assert.deepEqual(toolPreviews.slice(-2), ["[omitted secret file]", "[omitted secret file]"]);
     assert.equal(JSON.stringify(secondRequest.messages).includes("opaque-value"), false);
   }
 });
 
 class MockProvider implements ChatProvider {
   readonly messages: ChatMessage[][] = [];
+  readonly requestedTools: ToolDefinition[][] = [];
   private index = 0;
   acceptedCompletions = 0;
-  constructor(private readonly responses: AssistantResponse[]) {}
-  complete(messages: ChatMessage[]): Promise<AssistantResponse> {
+  constructor(
+    private readonly responses: AssistantResponse[],
+    private readonly autoDeclare = true,
+  ) {}
+  complete(messages: ChatMessage[], tools: ToolDefinition[]): Promise<AssistantResponse> {
     this.messages.push([...messages]);
+    this.requestedTools.push(tools);
+    if (this.autoDeclare && tools.length === 1 && tools[0]?.function.name === "declare_task") {
+      return Promise.resolve({
+        toolCalls: [
+          {
+            id: "task-1",
+            function: {
+              name: "declare_task",
+              arguments: JSON.stringify({
+                goal: "Complete the requested test task.",
+                completionCriteria: ["The requested result is returned."],
+              }),
+            },
+          },
+        ],
+      });
+    }
     const response = this.responses[this.index++];
     if (!response) throw new Error("Mock provider exhausted.");
     return Promise.resolve(response);
@@ -377,6 +521,22 @@ class MockProvider implements ChatProvider {
   acceptCompletion(): void {
     this.acceptedCompletions += 1;
   }
+}
+
+function taskDeclarationCall(suffix = ""): {
+  id: string;
+  function: { name: string; arguments: string };
+} {
+  return {
+    id: `task-${suffix || "1"}`,
+    function: {
+      name: "declare_task",
+      arguments: JSON.stringify({
+        goal: suffix ? `Complete the ${suffix} test task.` : "Complete the requested test task.",
+        completionCriteria: ["The requested result is returned."],
+      }),
+    },
+  };
 }
 
 class ConstantEmbeddingModel implements EmbeddingModel {

@@ -6,7 +6,7 @@ import test from "node:test";
 import { EpisodicMemory } from "../../src/agent/episodic-memory.js";
 import { AgentSession } from "../../src/agent/session.js";
 import type { AgentEvent } from "../../src/agent/events.js";
-import type { AssistantResponse, ChatProvider } from "../../src/shared/types.js";
+import type { AssistantResponse, ChatProvider, ToolDefinition } from "../../src/shared/types.js";
 
 void test("session pauses for approval and emits UI-ready lifecycle events", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
@@ -43,6 +43,9 @@ void test("session pauses for approval and emits UI-ready lifecycle events", asy
   assert.deepEqual(
     events.map((event) => event.type),
     [
+      "status",
+      "provider_request",
+      "task_declared",
       "status",
       "provider_request",
       "tool_proposed",
@@ -179,8 +182,24 @@ class MockProvider implements ChatProvider {
 
   constructor(private readonly responses: AssistantResponse[]) {}
 
-  complete(): Promise<AssistantResponse> {
+  complete(_messages: unknown[], tools: ToolDefinition[]): Promise<AssistantResponse> {
     this.calls += 1;
+    if (tools.length === 1 && tools[0]?.function.name === "declare_task") {
+      return Promise.resolve({
+        toolCalls: [
+          {
+            id: "task-1",
+            function: {
+              name: "declare_task",
+              arguments: JSON.stringify({
+                goal: "Complete the requested test task.",
+                completionCriteria: ["The requested result is returned."],
+              }),
+            },
+          },
+        ],
+      });
+    }
     const response = this.responses[this.index];
     this.index += 1;
     if (!response) throw new Error("Mock provider exhausted.");
