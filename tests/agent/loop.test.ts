@@ -211,11 +211,16 @@ void test("tool loop retains prior prompts and creates the first project file", 
     await (await import("node:fs/promises")).readFile(path.join(root, "HelloWorld.swift"), "utf8"),
     'print("Hello, World!")\n',
   );
+  const continuationRequest = provider.messages.find((messages) =>
+    messages.some(
+      (message) =>
+        message.role === "user" &&
+        message.content?.includes("Name it HelloWorld.swift and proceed."),
+    ),
+  );
   assert.ok(
-    provider.messages.some((messages) =>
-      messages.some(
-        (message) => message.role === "user" && message.content?.includes("standalone hello world"),
-      ),
+    continuationRequest?.some(
+      (message) => message.role === "user" && message.content?.includes("standalone hello world"),
     ),
   );
 });
@@ -516,7 +521,7 @@ void test("omits secret-file tool content from later provider request previews",
   }
 });
 
-void test("matches reused tool call IDs to their preceding call when previewing results", async (context) => {
+void test("does not retain prior tool results after a completed turn", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
   context.after(async () => rm(root, { recursive: true, force: true }));
   await writeFile(path.join(root, "README.md"), "Public file\n");
@@ -547,8 +552,17 @@ void test("matches reused tool call IDs to their preceding call when previewing 
     const toolPreviews = finalRequest.messages
       .filter((message) => message.role === "tool")
       .map((message) => message.preview);
-    assert.ok(toolPreviews.some((preview) => preview.includes("Public file")));
     assert.ok(toolPreviews.includes("[omitted secret file]"));
+    assert.equal(
+      toolPreviews.some((preview) => preview.includes("Public file")),
+      false,
+    );
+    assert.ok(
+      finalRequest.messages.some(
+        (message) =>
+          message.role === "assistant" && message.preview.includes("I read the public file."),
+      ),
+    );
     assert.equal(JSON.stringify(finalRequest.messages).includes("opaque-value"), false);
   }
 });

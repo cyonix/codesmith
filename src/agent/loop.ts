@@ -296,7 +296,9 @@ export class AgentLoop {
     const maximumPriorMessages =
       AgentLoop.maximumHistoryMessages - AgentLoop.maximumToolCallsPerRun * 2 - 4;
     const compacted = [systemMessage, latestUser];
-    if (latestWorkspaceAssistantIndex >= 0) {
+    if (latestAssistant) {
+      compacted.push(latestAssistant);
+    } else if (latestWorkspaceAssistantIndex >= 0) {
       const workspaceAssistant = this.messages[latestWorkspaceAssistantIndex];
       if (!workspaceAssistant) return;
       const toolResults: ChatMessage[] = [];
@@ -310,11 +312,7 @@ export class AgentLoop {
       }
       if (compacted.length + 1 + toolResults.length <= maximumPriorMessages) {
         compacted.push(workspaceAssistant, ...toolResults);
-      } else if (latestAssistant) {
-        compacted.push(latestAssistant);
       }
-    } else {
-      if (latestAssistant) compacted.push(latestAssistant);
     }
     this.messages.splice(0, this.messages.length, ...compacted);
   }
