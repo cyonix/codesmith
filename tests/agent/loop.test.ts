@@ -11,6 +11,8 @@ import {
   type EmbeddingModel,
   type MemoryEventSink,
 } from "../../src/agent/episodic-memory.js";
+import { modelCatalog } from "../../src/providers/model-catalog.js";
+import { ModelProvider } from "../../src/providers/provider.js";
 import { ToolExecutor } from "../../src/workspace/tools.js";
 import type {
   AssistantResponse,
@@ -342,6 +344,81 @@ void test("supplies retrieved memory as untrusted data only for the initial tool
     provider.messages[2]?.some((message) => message.content?.includes("Retrieved episodic data")),
     false,
   );
+});
+
+void test("does not replay consumed Gemini tool results after history compaction", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const model = modelCatalog.find((entry) => entry.protocol === "gemini");
+  assert.ok(model);
+  const requestBodies: string[] = [];
+  const provider = new ModelProvider({ model, apiKey: "test-key" }, (_input, init) => {
+    if (typeof init?.body !== "string") throw new Error("Expected a string request body.");
+    requestBodies.push(init.body);
+    switch (requestBodies.length) {
+      case 1:
+      case 4:
+        return Promise.resolve(
+          Response.json({
+            id: `interaction-${requestBodies.length}`,
+            steps: [
+              {
+                type: "function_call",
+                id: `task-${requestBodies.length}`,
+                name: "declare_task",
+                arguments: {
+                  goal: "Inspect the project.",
+                  completionCriteria: ["The requested result is returned."],
+                },
+              },
+            ],
+          }),
+        );
+      case 2:
+        return Promise.resolve(
+          Response.json({
+            id: "interaction-2",
+            steps: [
+              {
+                type: "function_call",
+                id: "list-1",
+                name: "list_files",
+                arguments: {},
+              },
+            ],
+          }),
+        );
+      case 3:
+        return Promise.resolve(
+          Response.json({
+            id: "interaction-3",
+            steps: [{ type: "model_output", content: [{ type: "text", text: "First complete." }] }],
+          }),
+        );
+      default:
+        return Promise.resolve(
+          Response.json({
+            id: "interaction-5",
+            steps: [
+              { type: "model_output", content: [{ type: "text", text: "Second complete." }] },
+            ],
+          }),
+        );
+    }
+  });
+  const loop = new AgentLoop(provider, await ToolExecutor.create(root, true));
+
+  assert.equal(await loop.run("Inspect the project."), "First complete.");
+  assert.equal(await loop.run("Inspect it again."), "Second complete.");
+
+  const secondDeclarationPayload = JSON.parse(requestBodies[3] ?? "") as {
+    previous_interaction_id: string;
+    input: Array<{ type: string; content?: string; call_id?: string }>;
+  };
+  assert.equal(secondDeclarationPayload.previous_interaction_id, "interaction-3");
+  assert.deepEqual(secondDeclarationPayload.input, [
+    { type: "user_input", content: "Inspect it again." },
+  ]);
 });
 
 void test("retrieves prior failed tool outcomes and final decisions", async (context) => {
