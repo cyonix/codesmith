@@ -217,6 +217,44 @@ void test("rejects a later task declaration without workspace lifecycle events",
     ),
   );
 });
+void test("rejects mixed post-declaration calls without executing workspace tools", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const events: AgentEvent[] = [];
+  const provider = new MockProvider(
+    [
+      { toolCalls: [taskDeclarationCall()] },
+      {
+        toolCalls: [
+          taskDeclarationCall("second"),
+          { id: "list-1", function: { name: "list_files", arguments: "{}" } },
+        ],
+      },
+      { content: "Completed.", toolCalls: [] },
+    ],
+    false,
+  );
+  const result = await new AgentLoop(provider, await ToolExecutor.create(root, true), 12, (event) =>
+    events.push(event),
+  ).run("Inspect the project.");
+
+  assert.equal(result, "Completed.");
+  assert.equal(
+    events.some((event) => event.type === "tool_proposed"),
+    false,
+  );
+  const mixedCallErrors = provider.messages[2]
+    ?.filter((message) => message.role === "tool")
+    .slice(-2);
+  assert.equal(mixedCallErrors?.length, 2);
+  assert.ok(
+    mixedCallErrors?.every(
+      (message) =>
+        message.role !== "tool" ||
+        message.content?.includes("cannot mix declare_task with workspace tools"),
+    ),
+  );
+});
 void test("tool loop retains prior prompts and creates the first project file", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
   context.after(async () => rm(root, { recursive: true, force: true }));

@@ -102,6 +102,33 @@ void test("enforces task contract bounds", () => {
     ).valid,
     false,
   );
+  assert.equal(
+    parseTaskContract(
+      JSON.stringify({
+        goal: "😀".repeat(500),
+        completionCriteria: ["😀".repeat(300)],
+      }),
+    ).valid,
+    true,
+  );
+  assert.equal(
+    parseTaskContract(
+      JSON.stringify({
+        goal: "😀".repeat(501),
+        completionCriteria: ["Tests pass."],
+      }),
+    ).valid,
+    false,
+  );
+  assert.equal(
+    parseTaskContract(
+      JSON.stringify({
+        goal: "Update the project",
+        completionCriteria: ["😀".repeat(301)],
+      }),
+    ).valid,
+    false,
+  );
 });
 
 void test("publishes a strict declaration tool schema", () => {

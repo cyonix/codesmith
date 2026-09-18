@@ -77,7 +77,7 @@ export function parseTaskContract(argumentsValue: string): TaskContractParseResu
 
   const goal = parsed.goal.trim();
   if (!goal) return { valid: false, message: "Task declaration goal must not be empty." };
-  if (goal.length > 500) {
+  if ([...goal].length > 500) {
     return { valid: false, message: "Task declaration goal must be at most 500 characters." };
   }
 
@@ -98,7 +98,7 @@ export function parseTaskContract(argumentsValue: string): TaskContractParseResu
     if (!trimmed) {
       return { valid: false, message: "Task completion criteria must not be empty." };
     }
-    if (trimmed.length > 300) {
+    if ([...trimmed].length > 300) {
       return {
         valid: false,
         message: "Each task completion criterion must be at most 300 characters.",

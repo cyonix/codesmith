@@ -100,6 +100,26 @@ export class AgentLoop {
       }
 
       toolRounds += 1;
+      const hasTaskDeclaration = toolCalls.some(
+        (call) => call.function.name === taskContractToolName,
+      );
+      const hasWorkspaceCall = toolCalls.some(
+        (call) => call.function.name !== taskContractToolName,
+      );
+      if (hasTaskDeclaration && hasWorkspaceCall) {
+        for (const call of toolCalls) {
+          this.messages.push({
+            role: "tool",
+            content: JSON.stringify({
+              error:
+                "A response cannot mix declare_task with workspace tools. Retry without workspace calls.",
+            }),
+            tool_call_id: call.id,
+          });
+        }
+        continue;
+      }
+
       for (const call of toolCalls) {
         this.assertOpen();
         if (call.function.name === taskContractToolName) {
