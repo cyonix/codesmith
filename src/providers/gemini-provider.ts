@@ -60,6 +60,13 @@ export class GeminiProvider extends ProviderClient {
     this.pendingInteractionId = undefined;
     this.pendingInteractionHasToolCalls = false;
   }
+
+  resetContinuation(): void {
+    this.previousInteractionId = undefined;
+    this.previousInteractionHasToolCalls = false;
+    this.pendingInteractionId = undefined;
+    this.pendingInteractionHasToolCalls = false;
+  }
 }
 
 function geminiInteractionInput(

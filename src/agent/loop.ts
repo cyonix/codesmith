@@ -37,9 +37,16 @@ export class AgentLoop {
 
   async run(prompt: string): Promise<string> {
     this.trimHistory();
+    const submissionStart = this.messages.length;
     const priorAssistantText = this.priorAssistantText();
     this.messages.push({ role: "user", content: prompt });
-    await this.declareTask();
+    try {
+      await this.declareTask();
+    } catch (error) {
+      this.messages.splice(submissionStart);
+      this.provider.resetContinuation?.();
+      throw error;
+    }
 
     const memoryContext = this.memory
       ? await this.memory.retrieve(

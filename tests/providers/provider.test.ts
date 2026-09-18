@@ -256,6 +256,53 @@ void test("preserves Gemini declaration results before retrieved memory input", 
   ]);
 });
 
+void test("resets Gemini continuation after a failed submission", async () => {
+  const requestBodies: string[] = [];
+  const provider = new ModelProvider(configuration("gemini"), (_input, init) => {
+    requestBodies.push(readRequestBody(init));
+    return Promise.resolve(
+      Response.json({
+        id: `interaction-${requestBodies.length}`,
+        steps: [
+          {
+            type: "function_call",
+            id: `task-${requestBodies.length}`,
+            name: "declare_task",
+            arguments: {
+              goal: "Inspect the project.",
+              completionCriteria: ["The requested result is returned."],
+            },
+          },
+        ],
+      }),
+    );
+  });
+
+  const first = await provider.complete([{ role: "user", content: "Old task." }], tools);
+  provider.acceptCompletion();
+  await provider.complete(
+    [
+      { role: "user", content: "Old task." },
+      { role: "assistant", content: first.content, tool_calls: first.toolCalls },
+      {
+        role: "tool",
+        tool_call_id: first.toolCalls[0]?.id,
+        content: '{"error":"invalid"}',
+      },
+    ],
+    tools,
+  );
+  provider.resetContinuation();
+  await provider.complete([{ role: "user", content: "New task." }], tools);
+
+  const nextPayload = JSON.parse(requestBodies[2] ?? "") as {
+    previous_interaction_id?: string;
+    input: Array<{ type: string; content?: string }>;
+  };
+  assert.equal(nextPayload.previous_interaction_id, undefined);
+  assert.deepEqual(nextPayload.input, [{ type: "user_input", content: "New task." }]);
+});
+
 void test("includes a bounded redacted provider error detail for HTTP failures", async () => {
   const provider = new ModelProvider(configuration("openai"), () =>
     Promise.resolve(

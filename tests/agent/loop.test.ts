@@ -154,6 +154,34 @@ void test("counts declaration calls across retry attempts", async (context) => {
   );
   assert.equal(provider.acceptedCompletions, 1);
 });
+void test("abandons failed declaration state before the next submission", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const provider = new FailedDeclarationProvider();
+  const loop = new AgentLoop(provider, await ToolExecutor.create(root, true));
+
+  await assert.rejects(() => loop.run("Old task."), /could not declare a valid task contract/);
+  assert.equal(await loop.run("New task."), "Completed.");
+
+  const nextDeclarationRequest = provider.messages[2];
+  assert.ok(nextDeclarationRequest);
+  assert.ok(
+    nextDeclarationRequest?.some(
+      (message) => message.role === "user" && message.content === "New task.",
+    ),
+  );
+  assert.equal(
+    nextDeclarationRequest?.some(
+      (message) => message.role === "user" && message.content === "Old task.",
+    ),
+    false,
+  );
+  assert.equal(
+    nextDeclarationRequest?.some((message) => message.role === "tool"),
+    false,
+  );
+  assert.equal(provider.resetCount, 1);
+});
 void test("does not execute mixed declaration and workspace calls", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
   context.after(async () => rm(root, { recursive: true, force: true }));
@@ -698,6 +726,7 @@ class MockProvider implements ChatProvider {
         ],
       });
     }
+
     const response = this.responses[this.index++];
     if (!response) throw new Error("Mock provider exhausted.");
     return Promise.resolve(response);
@@ -705,6 +734,38 @@ class MockProvider implements ChatProvider {
 
   acceptCompletion(): void {
     this.acceptedCompletions += 1;
+  }
+}
+
+class FailedDeclarationProvider implements ChatProvider {
+  readonly messages: ChatMessage[][] = [];
+  resetCount = 0;
+  private declarationAttempts = 0;
+
+  complete(messages: ChatMessage[], tools: ToolDefinition[]): Promise<AssistantResponse> {
+    this.messages.push([...messages]);
+    if (tools.length === 1) {
+      this.declarationAttempts += 1;
+      if (this.declarationAttempts <= 2) {
+        return Promise.resolve({
+          toolCalls: [
+            {
+              id: `invalid-task-${this.declarationAttempts}`,
+              function: {
+                name: "declare_task",
+                arguments: '{"goal":"Old task.","completionCriteria":[]}',
+              },
+            },
+          ],
+        });
+      }
+      return Promise.resolve({ toolCalls: [taskDeclarationCall("new")] });
+    }
+    return Promise.resolve({ content: "Completed.", toolCalls: [] });
+  }
+
+  resetContinuation(): void {
+    this.resetCount += 1;
   }
 }
 
