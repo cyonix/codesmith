@@ -25,6 +25,12 @@ void test("parses and trims a bounded task contract", () => {
     const contract = createTaskContract(result.input);
     assert.equal(contract.goal, "Update the project");
     assert.match(contract.taskId, /^[0-9a-f-]{36}$/);
+    assert.equal(Object.isFrozen(contract), true);
+    assert.equal(Object.isFrozen(contract.completionCriteria), true);
+    assert.equal(Reflect.set(contract, "goal", "Change the goal"), false);
+    assert.equal(Reflect.set(contract.completionCriteria, 0, "Change the criteria"), false);
+    assert.equal(contract.goal, "Update the project");
+    assert.deepEqual(contract.completionCriteria, ["Tests pass.", "The output is documented."]);
   }
 });
 

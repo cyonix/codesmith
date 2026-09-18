@@ -126,6 +126,7 @@ export class AgentLoop {
 
   private async declareTask(): Promise<TaskContract> {
     let lastError = "The provider did not call declare_task.";
+    let declarationCallsUsed = 0;
 
     for (let attempt = 0; attempt < AgentLoop.maximumTaskDeclarationAttempts; attempt += 1) {
       this.assertOpen();
@@ -137,16 +138,16 @@ export class AgentLoop {
       const response = await this.provider.complete(this.messages, [taskContractToolDefinition]);
       this.assertOpen();
 
-      if (response.toolCalls.length > AgentLoop.maximumToolCallsPerRun) {
+      const declarationCalls = response.toolCalls.map((call, index) =>
+        normalizeToolCall(call, index),
+      );
+      declarationCallsUsed += declarationCalls.length;
+      if (declarationCallsUsed > AgentLoop.maximumToolCallsPerRun) {
         throw new CodeSmithError(
           "loop",
           "The agent exceeded the maximum number of tool calls during task declaration.",
         );
       }
-
-      const declarationCalls = response.toolCalls.map((call, index) =>
-        normalizeToolCall(call, index),
-      );
       const declarationCall =
         declarationCalls.length === 1 && declarationCalls[0]?.function.name === taskContractToolName
           ? declarationCalls[0]

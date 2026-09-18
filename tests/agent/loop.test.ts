@@ -96,6 +96,28 @@ void test("retries a missing task declaration with protocol-safe feedback", asyn
   );
   assert.equal(provider.acceptedCompletions, 3);
 });
+void test("counts declaration calls across retry attempts", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const firstAttemptCalls = Array.from({ length: 12 }, (_, index) => ({
+    id: `invalid-task-${index}`,
+    function: {
+      name: "declare_task",
+      arguments: "{}",
+    },
+  }));
+  const provider = new MockProvider(
+    [{ toolCalls: firstAttemptCalls }, { toolCalls: [taskDeclarationCall()] }],
+    false,
+  );
+  const tools = await ToolExecutor.create(root, true);
+
+  await assert.rejects(
+    () => new AgentLoop(provider, tools).run("Inspect the project."),
+    /exceeded the maximum number of tool calls during task declaration/,
+  );
+  assert.equal(provider.acceptedCompletions, 1);
+});
 void test("does not execute mixed declaration and workspace calls", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
   context.after(async () => rm(root, { recursive: true, force: true }));

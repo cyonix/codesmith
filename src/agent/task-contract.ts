@@ -4,9 +4,9 @@ import type { JsonValue, ToolDefinition } from "../shared/types.js";
 export const taskContractToolName = "declare_task";
 
 export interface TaskContract {
-  taskId: string;
-  goal: string;
-  completionCriteria: string[];
+  readonly taskId: string;
+  readonly goal: string;
+  readonly completionCriteria: readonly string[];
 }
 
 export interface TaskContractInput {
@@ -115,7 +115,11 @@ export function parseTaskContract(argumentsValue: string): TaskContractParseResu
 }
 
 export function createTaskContract(input: TaskContractInput): TaskContract {
-  return { taskId: randomUUID(), ...input };
+  return Object.freeze({
+    taskId: randomUUID(),
+    goal: input.goal,
+    completionCriteria: Object.freeze([...input.completionCriteria]),
+  });
 }
 
 function isRecord(value: unknown): value is Record<string, JsonValue> {
