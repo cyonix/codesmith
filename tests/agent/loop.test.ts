@@ -98,6 +98,40 @@ void test("retries a missing task declaration with protocol-safe feedback", asyn
   );
   assert.equal(provider.acceptedCompletions, 3);
 });
+void test("does not retain retry feedback as the prior user prompt", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const provider = new MockProvider(
+    [
+      { content: "I will inspect the project.", toolCalls: [] },
+      { toolCalls: [taskDeclarationCall()] },
+      { content: "First complete.", toolCalls: [] },
+      { toolCalls: [taskDeclarationCall("second")] },
+      { content: "Second complete.", toolCalls: [] },
+    ],
+    false,
+  );
+  const loop = new AgentLoop(provider, await ToolExecutor.create(root, true));
+
+  assert.equal(await loop.run("Inspect the project."), "First complete.");
+  assert.equal(await loop.run("Inspect it again."), "Second complete.");
+
+  const secondDeclarationRequest = provider.messages.find((messages) =>
+    messages.some((message) => message.role === "user" && message.content === "Inspect it again."),
+  );
+  assert.ok(secondDeclarationRequest);
+  assert.ok(
+    secondDeclarationRequest?.some(
+      (message) => message.role === "user" && message.content === "Inspect the project.",
+    ),
+  );
+  assert.equal(
+    secondDeclarationRequest?.some((message) =>
+      message.content?.includes("Task declaration is required"),
+    ),
+    false,
+  );
+});
 void test("counts declaration calls across retry attempts", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
   context.after(async () => rm(root, { recursive: true, force: true }));

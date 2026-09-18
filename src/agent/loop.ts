@@ -17,6 +17,7 @@ export class AgentLoop {
   private static readonly maximumHistoryMessages = 32;
   private static readonly maximumToolCallsPerRun = 12;
   private static readonly maximumTaskDeclarationAttempts = 2;
+  private readonly retryFeedbackMessages = new WeakSet<ChatMessage>();
   private readonly messages: ChatMessage[] = [
     {
       role: "system",
@@ -201,11 +202,13 @@ export class AgentLoop {
           });
         }
       } else {
-        this.messages.push({
+        const retryFeedback: ChatMessage = {
           role: "user",
           content:
             "Task declaration is required before any answer or workspace action. Call declare_task exactly once with a goal and 1 to 8 observable completion criteria.",
-        });
+        };
+        this.retryFeedbackMessages.add(retryFeedback);
+        this.messages.push(retryFeedback);
       }
     }
 
@@ -246,7 +249,8 @@ export class AgentLoop {
 
     while (this.messages.length > maximumPriorMessages) {
       const nextUser = this.messages.findIndex(
-        (message, index) => index > 1 && message.role === "user",
+        (message, index) =>
+          index > 1 && message.role === "user" && !this.retryFeedbackMessages.has(message),
       );
       if (nextUser < 0) {
         this.compactLatestTurn();
@@ -259,7 +263,8 @@ export class AgentLoop {
   private compactLatestTurn(): void {
     let latestUserIndex = -1;
     for (let index = this.messages.length - 1; index >= 0; index -= 1) {
-      if (this.messages[index]?.role === "user") {
+      const message = this.messages[index];
+      if (message?.role === "user" && !this.retryFeedbackMessages.has(message)) {
         latestUserIndex = index;
         break;
       }
