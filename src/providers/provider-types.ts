@@ -11,4 +11,5 @@ export interface ProviderConfiguration {
 export interface ProviderImplementation {
   complete(messages: ChatMessage[], tools: ToolDefinition[]): Promise<AssistantResponse>;
   acceptCompletion?(): void;
+  resetContinuation?(): void;
 }
