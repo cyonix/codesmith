@@ -6,12 +6,14 @@ export function formatDebugEvent(event: AgentEvent): string {
   switch (event.type) {
     case "status":
       return `[status] ${event.phase}`;
-    case "task_declared":
-      return `[task_declared] ${event.contract.taskId} goal=${previewSensitiveText(
-        event.contract.goal,
-      )} criteria=${event.contract.completionCriteria
-        .map((criterion, index) => `${index + 1}. ${previewSensitiveText(criterion)}`)
-        .join(" | ")}`;
+    case "task_declared": {
+      const contractPreview = previewSensitiveText(
+        `goal=${event.contract.goal} criteria=${event.contract.completionCriteria
+          .map((criterion, index) => `${index + 1}. ${criterion}`)
+          .join(" | ")}`,
+      );
+      return `[task_declared] ${event.contract.taskId} ${contractPreview}`;
+    }
     case "assistant_text":
       return `[assistant_text] ${previewSensitiveText(event.text)}`;
     case "tool_proposed":

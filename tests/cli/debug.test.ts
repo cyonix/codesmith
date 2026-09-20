@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { formatDebugEvent } from "../../src/cli/debug.js";
+import { previewMaximumBytes } from "../../src/shared/redaction.js";
 
 void test("formats tagged debug lines for all agent events", () => {
   assert.equal(formatDebugEvent({ type: "status", phase: "thinking" }), "[status] thinking");
@@ -253,4 +254,18 @@ void test("redacts task-contract completion criteria", () => {
 
   assert.match(taskLine, /criteria=1\. API key \[REDACTED\]/);
   assert.doesNotMatch(taskLine, /private-value/);
+});
+
+void test("bounds the complete task-contract debug payload", () => {
+  const taskLine = formatDebugEvent({
+    type: "task_declared",
+    contract: {
+      taskId: "task-large",
+      goal: "Inspect the project.",
+      completionCriteria: Array.from({ length: 8 }, () => "é".repeat(300)),
+    },
+  });
+  const prefix = "[task_declared] task-large ";
+
+  assert.ok(Buffer.byteLength(taskLine.slice(prefix.length), "utf8") <= previewMaximumBytes);
 });
