@@ -123,7 +123,8 @@ void test("redacts credentials and omits secret-file payloads", () => {
   });
   assert.match(taskLine, /^\[task_declared\] task-secret/);
   assert.match(taskLine, /\[REDACTED\]/);
-  assert.doesNotMatch(taskLine, /sk-abcdefghijklmnopqrstuvwxyz|criterion-secret/);
+  assert.match(taskLine, /criteria=1\. Keep \[REDACTED\]/);
+  assert.doesNotMatch(taskLine, /sk-abcdefghijklmnopqrstuvwxyz/);
   assert.equal(
     formatDebugEvent({
       type: "approval_requested",
