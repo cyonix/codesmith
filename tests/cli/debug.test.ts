@@ -5,6 +5,17 @@ import { formatDebugEvent } from "../../src/cli/debug.js";
 void test("formats tagged debug lines for all agent events", () => {
   assert.equal(formatDebugEvent({ type: "status", phase: "thinking" }), "[status] thinking");
   assert.equal(
+    formatDebugEvent({
+      type: "task_declared",
+      contract: {
+        taskId: "task-123",
+        goal: "Inspect the project.",
+        completionCriteria: ["The requested result is returned."],
+      },
+    }),
+    "[task_declared] task-123",
+  );
+  assert.equal(
     formatDebugEvent({ type: "assistant_text", text: "Created HelloWorld.swift." }),
     "[assistant_text] Created HelloWorld.swift.",
   );
