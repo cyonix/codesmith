@@ -13,7 +13,7 @@ void test("formats tagged debug lines for all agent events", () => {
         completionCriteria: ["The requested result is returned."],
       },
     }),
-    "[task_declared] task-123",
+    "[task_declared] task-123 goal=Inspect the project. criteria=1. The requested result is returned.",
   );
   assert.equal(
     formatDebugEvent({ type: "assistant_text", text: "Created HelloWorld.swift." }),
@@ -112,6 +112,17 @@ void test("formats tagged debug lines for all agent events", () => {
 });
 
 void test("redacts credentials and omits secret-file payloads", () => {
+  const taskLine = formatDebugEvent({
+    type: "task_declared",
+    contract: {
+      taskId: "task-secret",
+      goal: "Use apiKey: sk-abcdefghijklmnopqrstuvwxyz",
+      completionCriteria: ["Keep password=criterion-secret private."],
+    },
+  });
+  assert.match(taskLine, /^\[task_declared\] task-secret/);
+  assert.match(taskLine, /\[REDACTED\]/);
+  assert.doesNotMatch(taskLine, /sk-abcdefghijklmnopqrstuvwxyz|criterion-secret/);
   assert.equal(
     formatDebugEvent({
       type: "approval_requested",

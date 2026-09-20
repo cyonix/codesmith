@@ -7,7 +7,11 @@ export function formatDebugEvent(event: AgentEvent): string {
     case "status":
       return `[status] ${event.phase}`;
     case "task_declared":
-      return `[task_declared] ${event.contract.taskId}`;
+      return `[task_declared] ${event.contract.taskId} goal=${previewSensitiveText(
+        event.contract.goal,
+      )} criteria=${event.contract.completionCriteria
+        .map((criterion, index) => `${index + 1}. ${previewSensitiveText(criterion)}`)
+        .join(" | ")}`;
     case "assistant_text":
       return `[assistant_text] ${previewSensitiveText(event.text)}`;
     case "tool_proposed":
