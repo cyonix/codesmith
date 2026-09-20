@@ -11,10 +11,20 @@ export function formatDebugEvent(event: AgentEvent): string {
       const redactedCriteria = event.contract.completionCriteria.map(
         (criterion, index) => `${index + 1}. ${redactSensitiveText(criterion)}`,
       );
+      const redactedPlan = event.contract.plan.map(
+        (step, index) => `${index + 1}. ${redactSensitiveText(step)}`,
+      );
       const contractPreview = truncatePreview(
-        `goal=${redactedGoal} criteria=${redactedCriteria.join(" | ")}`,
+        `goal=${redactedGoal} criteria=${redactedCriteria.join(" | ")} plan=${redactedPlan.join(" | ")}`,
       );
       return `[task_declared] ${event.contract.taskId} ${contractPreview}`;
+    }
+    case "plan_revised": {
+      const plan = event.plan.map((step, index) => `${index + 1}. ${redactSensitiveText(step)}`);
+      const revisionPreview = truncatePreview(
+        `reason=${redactSensitiveText(event.reason)} plan=${plan.join(" | ")}`,
+      );
+      return `[plan_revised] ${event.taskId} ${revisionPreview}`;
     }
     case "assistant_text":
       return `[assistant_text] ${previewSensitiveText(event.text)}`;

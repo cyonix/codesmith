@@ -12,13 +12,23 @@ void test("formats tagged debug lines for all agent events", () => {
         taskId: "task-123",
         goal: "Inspect the project.",
         completionCriteria: ["The requested result is returned."],
+        plan: ["Inspect the project.", "Report the result."],
       },
     }),
-    "[task_declared] task-123 goal=Inspect the project. criteria=1. The requested result is returned.",
+    "[task_declared] task-123 goal=Inspect the project. criteria=1. The requested result is returned. plan=1. Inspect the project. | 2. Report the result.",
   );
   assert.equal(
     formatDebugEvent({ type: "assistant_text", text: "Created HelloWorld.swift." }),
     "[assistant_text] Created HelloWorld.swift.",
+  );
+  assert.equal(
+    formatDebugEvent({
+      type: "plan_revised",
+      taskId: "task-123",
+      plan: ["Read the files.", "Run the tests."],
+      reason: "The scope changed.",
+    }),
+    "[plan_revised] task-123 reason=The scope changed. plan=1. Read the files. | 2. Run the tests.",
   );
   assert.equal(
     formatDebugEvent({
@@ -118,6 +128,7 @@ void test("redacts credentials and omits secret-file payloads", () => {
     contract: {
       taskId: "task-secret",
       goal: "Use apiKey: sk-abcdefghijklmnopqrstuvwxyz",
+      plan: ["Keep the key private."],
       completionCriteria: ["Keep password=criterion-secret private."],
     },
   });
@@ -250,6 +261,7 @@ void test("redacts task-contract completion criteria", () => {
       taskId: "task-criteria-secret",
       goal: "Inspect the project.",
       completionCriteria: ["API key: private-value"],
+      plan: ["Keep API key: private-value private."],
     },
   });
 
@@ -264,9 +276,22 @@ void test("bounds the complete task-contract debug payload", () => {
       taskId: "task-large",
       goal: "Inspect the project.",
       completionCriteria: Array.from({ length: 8 }, () => "é".repeat(300)),
+      plan: Array.from({ length: 8 }, () => "é".repeat(300)),
     },
   });
   const prefix = "[task_declared] task-large ";
 
   assert.ok(Buffer.byteLength(taskLine.slice(prefix.length), "utf8") <= previewMaximumBytes);
+});
+
+void test("bounds the complete plan-revision debug payload", () => {
+  const planLine = formatDebugEvent({
+    type: "plan_revised",
+    taskId: "task-large-revision",
+    reason: "é".repeat(300),
+    plan: Array.from({ length: 8 }, () => "é".repeat(300)),
+  });
+  const prefix = "[plan_revised] task-large-revision ";
+
+  assert.ok(Buffer.byteLength(planLine.slice(prefix.length), "utf8") <= previewMaximumBytes);
 });

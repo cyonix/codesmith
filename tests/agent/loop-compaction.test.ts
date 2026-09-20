@@ -50,6 +50,7 @@ class CompactionProvider implements ChatProvider {
               arguments: JSON.stringify({
                 goal: "Inspect the project.",
                 completionCriteria: ["The requested result is returned."],
+                plan: ["Inspect the project.", "Report the result."],
               }),
             },
           },

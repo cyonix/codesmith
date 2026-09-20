@@ -100,6 +100,101 @@ void test("requires and emits a bounded task contract before workspace work", as
     assert.match(declaration.contract.taskId, /^[0-9a-f-]{36}$/);
   }
 });
+void test("revises the plan with evidence before the next workspace action", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const events: AgentEvent[] = [];
+  const provider = new MockProvider(
+    [
+      {
+        toolCalls: [
+          {
+            id: "revision-1",
+            function: {
+              name: "revise_plan",
+              arguments: JSON.stringify({
+                plan: ["Read the existing file.", "Apply the focused change."],
+                reason: "The initial discovery found an existing implementation.",
+              }),
+            },
+          },
+        ],
+      },
+      {
+        toolCalls: [
+          {
+            id: "read-1",
+            function: { name: "list_files", arguments: "{}" },
+          },
+        ],
+      },
+      { content: "Completed.", toolCalls: [] },
+    ],
+    true,
+  );
+
+  const result = await new AgentLoop(provider, await ToolExecutor.create(root, true), 12, (event) =>
+    events.push(event),
+  ).run("Inspect the project.");
+
+  assert.equal(result, "Completed.");
+  assert.deepEqual(
+    events.filter((event) => event.type === "plan_revised"),
+    [
+      {
+        type: "plan_revised",
+        taskId: events.find((event) => event.type === "task_declared")?.contract.taskId,
+        plan: ["Read the existing file.", "Apply the focused change."],
+        reason: "The initial discovery found an existing implementation.",
+      },
+    ],
+  );
+});
+void test("allows batched reads but rejects multiple side-effecting calls", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const provider = new MockProvider(
+    [
+      {
+        toolCalls: [
+          {
+            id: "create-1",
+            function: { name: "create_file", arguments: '{"path":"one.txt","content":"1"}' },
+          },
+          {
+            id: "create-2",
+            function: { name: "create_file", arguments: '{"path":"two.txt","content":"2"}' },
+          },
+        ],
+      },
+      {
+        toolCalls: [
+          { id: "list-1", function: { name: "list_files", arguments: "{}" } },
+          { id: "list-2", function: { name: "list_files", arguments: "{}" } },
+        ],
+      },
+      { content: "Completed.", toolCalls: [] },
+    ],
+    true,
+  );
+
+  const result = await new AgentLoop(provider, await ToolExecutor.create(root, true)).run(
+    "Create both files.",
+  );
+
+  assert.equal(result, "Completed.");
+  await assert.rejects(() => readFile(path.join(root, "one.txt")));
+  await assert.rejects(() => readFile(path.join(root, "two.txt")));
+  assert.ok(
+    provider.messages.some((messages) =>
+      messages.some(
+        (message) =>
+          message.role === "tool" &&
+          message.content?.includes("more than one side-effecting workspace call"),
+      ),
+    ),
+  );
+});
 void test("retries a missing task declaration with protocol-safe feedback", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
   context.after(async () => rm(root, { recursive: true, force: true }));
@@ -580,6 +675,7 @@ void test("does not replay consumed Gemini tool results after history compaction
                 arguments: {
                   goal: "Inspect the project.",
                   completionCriteria: ["The requested result is returned."],
+                  plan: ["Inspect the project.", "Report the result."],
                 },
               },
             ],
@@ -653,6 +749,7 @@ void test("preserves session-start context in Gemini declaration input after com
               arguments: {
                 goal: "Answer the request.",
                 completionCriteria: ["The requested result is returned."],
+                plan: ["Inspect the project.", "Report the result."],
               },
             },
           ]
@@ -885,6 +982,7 @@ class MockProvider implements ChatProvider {
               arguments: JSON.stringify({
                 goal: "Complete the requested test task.",
                 completionCriteria: ["The requested result is returned."],
+                plan: ["Inspect the project.", "Report the result."],
               }),
             },
           },
@@ -948,6 +1046,7 @@ function taskDeclarationCall(suffix = ""): {
       arguments: JSON.stringify({
         goal: suffix ? `Complete the ${suffix} test task.` : "Complete the requested test task.",
         completionCriteria: ["The requested result is returned."],
+        plan: ["Inspect the project.", "Report the result."],
       }),
     },
   };

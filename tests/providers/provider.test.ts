@@ -195,6 +195,7 @@ void test("preserves Gemini declaration results before retrieved memory input", 
                 arguments: {
                   goal: "Inspect the project.",
                   completionCriteria: ["The requested result is returned."],
+                  plan: ["Inspect the project.", "Report the result."],
                 },
               },
             ],
@@ -212,6 +213,7 @@ void test("preserves Gemini declaration results before retrieved memory input", 
       arguments: JSON.stringify({
         goal: "Inspect the project.",
         completionCriteria: ["The requested result is returned."],
+        plan: ["Inspect the project.", "Report the result."],
       }),
     },
   };
@@ -277,6 +279,7 @@ void test("restores Gemini continuation after a failed submission", async () => 
                 arguments: {
                   goal: "Inspect the project.",
                   completionCriteria: ["The requested result is returned."],
+                  plan: ["Inspect the project.", "Report the result."],
                 },
               },
             ],
@@ -341,6 +344,7 @@ void test("restores Gemini tool-result continuation state after a failed submiss
                 arguments: {
                   goal: "Inspect the project.",
                   completionCriteria: ["The requested result is returned."],
+                  plan: ["Inspect the project.", "Report the result."],
                 },
               },
             ],

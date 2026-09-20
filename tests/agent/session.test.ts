@@ -194,6 +194,7 @@ class MockProvider implements ChatProvider {
               arguments: JSON.stringify({
                 goal: "Complete the requested test task.",
                 completionCriteria: ["The requested result is returned."],
+                plan: ["Inspect the project.", "Report the result."],
               }),
             },
           },

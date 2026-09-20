@@ -7,8 +7,10 @@ void test("exports TaskContract through Agent Core", () => {
     taskId: "task-123",
     goal: "Inspect the project.",
     completionCriteria: ["The result is reported."],
+    plan: ["Inspect the project.", "Report the result."],
   };
 
   assert.equal(contract.goal, "Inspect the project.");
   assert.deepEqual(contract.completionCriteria, ["The result is reported."]);
+  assert.deepEqual(contract.plan, ["Inspect the project.", "Report the result."]);
 });
