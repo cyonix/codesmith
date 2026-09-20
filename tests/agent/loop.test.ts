@@ -62,6 +62,17 @@ void test("does not return an assistant completion twice", async (context) => {
     [{ type: "assistant_text", text: "I inspected main.js and started the change." }],
   );
 });
+void test("preserves intentional repeated words in an assistant completion", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const provider = new MockProvider([{ content: "no no", toolCalls: [] }]);
+
+  const result = await new AgentLoop(provider, await ToolExecutor.create(root, true)).run(
+    "Repeat the word.",
+  );
+
+  assert.equal(result, "no no");
+});
 void test("requires and emits a bounded task contract before workspace work", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
   context.after(async () => rm(root, { recursive: true, force: true }));

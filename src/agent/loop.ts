@@ -435,7 +435,7 @@ function normalizeAssistantText(content: string | null | undefined): string | nu
   if (!content) return content;
 
   const trimmed = content.trim();
-  const duplicate = trimmed.match(/^([\s\S]+?)\s+\1$/);
+  const duplicate = trimmed.match(/^([\s\S]+?)\r?\n\s*\r?\n\1$/);
   return duplicate?.[1]?.trimEnd() ?? content;
 }
 
