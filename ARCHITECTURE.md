@@ -374,9 +374,9 @@ servers; review Google's retention terms before selecting a Gemini model.
 - It blocks `.git` internals, including Git worktree pointer files.
 - It creates and deletes files only at the project root. Create directories
   yourself before asking CodeSmith to edit a nested file.
-- Patch fragments can contain at most 500 characters. New-file content can
-  contain at most 500 characters and 1 MB. Edit previews escape terminal
-  control characters.
+- New-file content and patched files can be up to 10 MB. Patch fragments have
+  no separate character limit, and the resulting file must remain within the
+  10 MB limit. Edit previews escape terminal control characters.
 - Commands run without a shell and with a fixed, non-secret `PATH`.
 - Commands and Git inspection use a minimal subprocess environment. Git diff
   disables external diff and text-conversion helpers.

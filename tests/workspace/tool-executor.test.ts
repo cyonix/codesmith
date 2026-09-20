@@ -42,6 +42,30 @@ void test("creates a root file after approval", async (context) => {
     'print("Hello, World!")\n',
   );
 });
+void test("creates a root file with content larger than the old fragment limit", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const content = "x".repeat(501);
+  const tools = await ToolExecutor.create(root, false, () => Promise.resolve(true));
+
+  const result = await tools.execute(call("create_file", { path: "large.txt", content }));
+
+  assert.deepEqual(JSON.parse(result), { status: "created", path: "large.txt" });
+  assert.equal(await readFile(path.join(root, "large.txt"), "utf8"), content);
+});
+void test("rejects new-file content larger than 10 MB", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const filePath = path.join(root, "oversized.txt");
+  const tools = await ToolExecutor.create(root, true);
+
+  const result = await tools.execute(
+    call("create_file", { path: "oversized.txt", content: "x".repeat(10_000_001) }),
+  );
+
+  assert.match(resultError(result), /at most 10 MB/);
+  await assert.rejects(() => readFile(filePath));
+});
 void test("deletes a root file after approval", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
   context.after(async () => rm(root, { recursive: true, force: true }));
@@ -171,6 +195,45 @@ void test("writes an approved patch through the constrained descriptor", async (
   );
   assert.deepEqual(JSON.parse(result), { status: "applied", path: "Sources/source.swift" });
   assert.equal(await readFile(filePath, "utf8"), "let value = 2");
+});
+void test("applies patch fragments larger than the old fragment limit", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const filePath = path.join(root, "source.swift");
+  const expected = "old".repeat(200);
+  const replacement = "new".repeat(200);
+  await writeFile(filePath, `prefix ${expected} suffix`);
+  const tools = await ToolExecutor.create(root, false, () => Promise.resolve(true));
+
+  const result = await tools.execute(
+    call("apply_patch", { path: "source.swift", expected_content: expected, replacement }),
+  );
+
+  assert.deepEqual(JSON.parse(result), { status: "applied", path: "source.swift" });
+  assert.equal(await readFile(filePath, "utf8"), `prefix ${replacement} suffix`);
+});
+void test("rejects an oversized patch before approval and preserves the original file", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const filePath = path.join(root, "source.swift");
+  await writeFile(filePath, "original");
+  let approvalRequests = 0;
+  const tools = await ToolExecutor.create(root, false, () => {
+    approvalRequests += 1;
+    return Promise.resolve(true);
+  });
+
+  const result = await tools.execute(
+    call("apply_patch", {
+      path: "source.swift",
+      expected_content: "original",
+      replacement: "x".repeat(10_000_001),
+    }),
+  );
+
+  assert.match(resultError(result), /exceed 10 MB/);
+  assert.equal(approvalRequests, 0);
+  assert.equal(await readFile(filePath, "utf8"), "original");
 });
 void test("rejects a hard-linked patch target and preserves its external source", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));

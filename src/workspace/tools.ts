@@ -26,7 +26,6 @@ import type { JsonValue, ToolCall, ToolDefinition } from "../shared/types.js";
 
 const MAXIMUM_TEXT_BYTES = 10_000_000;
 const MAXIMUM_COMMAND_OUTPUT_BYTES = 20_000;
-const MAXIMUM_PATCH_FRAGMENT_CHARACTERS = 500;
 
 const trustedCommandDirectories = [
   "/usr/bin",
@@ -180,15 +179,8 @@ export class ToolExecutor {
 
     assertRootFilePath(requestedPath, "create_file");
 
-    if (
-      content.length > MAXIMUM_PATCH_FRAGMENT_CHARACTERS ||
-      Buffer.byteLength(content, "utf8") > MAXIMUM_TEXT_BYTES
-    ) {
-      throw new SwiftCoderAIError(
-        "arguments",
-        "New-file content must be at most 500 characters and 1 MB.",
-      );
-    }
+    if (Buffer.byteLength(content, "utf8") > MAXIMUM_TEXT_BYTES)
+      throw new SwiftCoderAIError("arguments", "New-file content must be at most 10 MB.");
 
     const filePath = this.permitted(await this.sandbox.resolve(requestedPath));
 
@@ -281,21 +273,19 @@ export class ToolExecutor {
     const expected = requiredString(argumentsValue.expected_content, "expected_content");
     const replacement = requiredString(argumentsValue.replacement, "replacement");
 
-    if (
-      expected.length > MAXIMUM_PATCH_FRAGMENT_CHARACTERS ||
-      replacement.length > MAXIMUM_PATCH_FRAGMENT_CHARACTERS
-    )
-      throw new SwiftCoderAIError(
-        "arguments",
-        "Patch fragments must be at most 500 characters so the full change can be approved.",
-      );
-
     const filePath = this.permitted(await this.sandbox.resolve(requestedPath));
     await assertPatchableText(filePath);
 
     const initialContent = await this.readTextSafely(filePath, MAXIMUM_TEXT_BYTES);
     if (!initialContent || occurrences(initialContent, expected) !== 1)
       throw new SwiftCoderAIError("arguments", "expected_content must occur exactly once.");
+
+    const prospectiveOutputBytes =
+      Buffer.byteLength(initialContent, "utf8") -
+      Buffer.byteLength(expected, "utf8") +
+      Buffer.byteLength(replacement, "utf8");
+    if (prospectiveOutputBytes > MAXIMUM_TEXT_BYTES)
+      throw new SwiftCoderAIError("arguments", "Patched file would exceed 10 MB.");
 
     const summary = `Apply patch to ${safePreview(this.sandbox.relative(filePath))}:\n- ${safePreview(expected)}\n+ ${safePreview(replacement)}`;
     if (!(await this.isApproved({ kind: "edit", summary })))
@@ -566,7 +556,7 @@ async function assertPatchableText(filePath: string): Promise<void> {
   const fileStat = await stat(filePath);
 
   if (!fileStat.isFile() || fileStat.size > MAXIMUM_TEXT_BYTES)
-    throw new SwiftCoderAIError("sandbox", "Patches require an existing UTF-8 file up to 1 MB.");
+    throw new SwiftCoderAIError("sandbox", "Patches require an existing UTF-8 file up to 10 MB.");
   if (fileStat.nlink !== 1)
     throw new SwiftCoderAIError("sandbox", "Patches cannot modify files with multiple hard links.");
 }
@@ -594,7 +584,7 @@ async function replaceVerifiedText(
     await validateOpenedTarget(fileHandle, fileStat, sandbox.root, filePath);
 
     if (!fileStat.isFile() || fileStat.size > MAXIMUM_TEXT_BYTES)
-      throw new SwiftCoderAIError("sandbox", "Patches require an existing UTF-8 file up to 1 MB.");
+      throw new SwiftCoderAIError("sandbox", "Patches require an existing UTF-8 file up to 10 MB.");
     if (fileStat.nlink !== 1)
       throw new SwiftCoderAIError(
         "sandbox",
@@ -607,7 +597,7 @@ async function replaceVerifiedText(
 
     const output = content.replace(expected, replacement);
     if (Buffer.byteLength(output, "utf8") > MAXIMUM_TEXT_BYTES)
-      throw new SwiftCoderAIError("sandbox", "Patched file would exceed 1 MB.");
+      throw new SwiftCoderAIError("sandbox", "Patched file would exceed 10 MB.");
 
     await fileHandle.truncate(0);
 
