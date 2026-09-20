@@ -26,6 +26,40 @@ import {
   logFileOpenFlags,
 } from "../../src/cli/logger.js";
 
+class FixedLocalDate extends Date {
+  override getFullYear(): number {
+    return 2026;
+  }
+
+  override getMonth(): number {
+    return 8;
+  }
+
+  override getDate(): number {
+    return 20;
+  }
+
+  override getHours(): number {
+    return 17;
+  }
+
+  override getMinutes(): number {
+    return 43;
+  }
+
+  override getSeconds(): number {
+    return 21;
+  }
+
+  override getMilliseconds(): number {
+    return 624;
+  }
+
+  override getTimezoneOffset(): number {
+    return 300;
+  }
+}
+
 void test("writes debug lines and escapes terminal controls", () => {
   const lines: string[] = [];
   const timestamp = new Date("2026-09-20T22:43:21.624Z");
@@ -65,10 +99,7 @@ void test("timestamps each physical line independently", () => {
 });
 
 void test("formats local timestamps with milliseconds and an offset", () => {
-  assert.match(
-    formatLogTimestamp(new Date("2026-09-20T22:43:21.624Z")),
-    /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} [+-]\d{4}$/,
-  );
+  assert.equal(formatLogTimestamp(new FixedLocalDate()), "2026-09-20 17:43:21.624 -0500");
 });
 
 void test("selects the macOS log directory outside the project", () => {
