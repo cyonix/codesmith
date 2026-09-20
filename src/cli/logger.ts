@@ -16,6 +16,7 @@ import os from "node:os";
 import path from "node:path";
 import { stderr } from "node:process";
 import { CodeSmithError } from "../shared/errors.js";
+import { escapeTerminalText } from "../shared/terminal-text.js";
 
 export interface Logger {
   debug(message: string): void;
@@ -330,23 +331,7 @@ function secureLogFile(fd: number): void {
 }
 
 function escapeLogLine(line: string): string {
-  return [...line]
-    .map((character) => {
-      const codePoint = character.codePointAt(0);
-      if (codePoint === undefined) return character;
-      if (
-        codePoint <= 0x1f ||
-        (codePoint >= 0x7f && codePoint <= 0x9f) ||
-        codePoint === 0x2028 ||
-        codePoint === 0x2029 ||
-        (codePoint >= 0x202a && codePoint <= 0x202e) ||
-        (codePoint >= 0x2066 && codePoint <= 0x2069)
-      ) {
-        return `\\u${codePoint.toString(16).padStart(4, "0")}`;
-      }
-      return character;
-    })
-    .join("");
+  return escapeTerminalText(line);
 }
 
 function errorMessage(error: unknown): string {

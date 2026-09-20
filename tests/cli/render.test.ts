@@ -33,3 +33,17 @@ void test("keeps multiline contract fields on one rendered line", () => {
     ].join("\n"),
   );
 });
+
+void test("escapes terminal controls in contract fields", () => {
+  const taskLine = formatTaskContract({
+    taskId: "task-hidden",
+    goal: "Inspect \u001b[2J\u202eproject.",
+    completionCriteria: ["The \u009b2J files are reviewed."],
+  });
+
+  assert.match(taskLine, /Task: Inspect \\u001b\[2J\\u202eproject\./);
+  assert.match(taskLine, /1\. The \\u009b2J files are reviewed\./);
+  assert.equal(taskLine.includes(String.fromCodePoint(0x1b)), false);
+  assert.equal(taskLine.includes(String.fromCodePoint(0x9b)), false);
+  assert.equal(taskLine.includes(String.fromCodePoint(0x202e)), false);
+});

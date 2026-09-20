@@ -1,4 +1,5 @@
 import type { TaskContract } from "../agent/task-contract.js";
+import { escapeTerminalText } from "../shared/terminal-text.js";
 
 export function formatTaskContract(contract: TaskContract): string {
   return [
@@ -11,5 +12,5 @@ export function formatTaskContract(contract: TaskContract): string {
 }
 
 function normalizeContractText(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
+  return escapeTerminalText(value.replace(/\s+/g, " ").trim());
 }
