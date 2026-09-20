@@ -240,3 +240,17 @@ void test("redacts credentials and omits secret-file payloads", () => {
     assert.doesNotMatch(line, /omitted secret file/);
   }
 });
+
+void test("redacts task-contract completion criteria", () => {
+  const taskLine = formatDebugEvent({
+    type: "task_declared",
+    contract: {
+      taskId: "task-criteria-secret",
+      goal: "Inspect the project.",
+      completionCriteria: ["API key: private-value"],
+    },
+  });
+
+  assert.match(taskLine, /criteria=1\. API key \[REDACTED\]/);
+  assert.doesNotMatch(taskLine, /private-value/);
+});

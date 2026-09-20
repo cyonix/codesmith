@@ -102,8 +102,6 @@ sequenceDiagram
     Memory->>Cache: download, verify, and install model
   end
   Session->>Agent: run(prompt)
-  Agent->>Memory: retrieve relevant episodes
-  Memory-->>Agent: bounded untrusted evidence
   Agent->>Provider: declare_task only
   Provider-->>Agent: bounded task contract
   Agent-->>Client: task_declared event
