@@ -24,6 +24,7 @@ export interface Logger {
 
 export interface LoggerOptions {
   write?: (line: string) => void;
+  now?: () => Date;
 }
 
 export interface LogPathOptions {
@@ -38,6 +39,20 @@ export interface FileLogWriter {
 }
 
 export const sessionLogMaximumBytes = 16 * 1024 * 1024;
+
+export function formatLogTimestamp(date: Date): string {
+  const offsetMinutes = -date.getTimezoneOffset();
+  const offsetSign = offsetMinutes >= 0 ? "+" : "-";
+  const absoluteOffsetMinutes = Math.abs(offsetMinutes);
+  const offsetHours = Math.floor(absoluteOffsetMinutes / 60);
+  const offsetRemainderMinutes = absoluteOffsetMinutes % 60;
+
+  return [
+    `${padNumber(date.getFullYear(), 4)}-${padNumber(date.getMonth() + 1)}-${padNumber(date.getDate())}`,
+    `${padNumber(date.getHours())}:${padNumber(date.getMinutes())}:${padNumber(date.getSeconds())}.${padNumber(date.getMilliseconds(), 3)}`,
+    `${offsetSign}${padNumber(offsetHours)}${padNumber(offsetRemainderMinutes)}`,
+  ].join(" ");
+}
 
 export function assertFileLoggingSupported(platform = process.platform): void {
   if (platform !== "darwin") {
@@ -175,12 +190,19 @@ export function createFileLogWriter(
 
 export function createLogger(options: LoggerOptions = {}): Logger {
   const write = options.write ?? ((line) => stderr.write(`${line}\n`));
+  const now = options.now ?? (() => new Date());
 
   return {
     debug(message) {
-      for (const line of message.split("\n")) write(`debug ${escapeLogLine(line)}`);
+      for (const line of message.split("\n")) {
+        write(`${formatLogTimestamp(now())} debug ${escapeLogLine(line)}`);
+      }
     },
   };
+}
+
+function padNumber(value: number, length = 2): string {
+  return value.toString().padStart(length, "0");
 }
 
 function openExclusiveLogFile(filePath: string): { fd: number; path: string } {

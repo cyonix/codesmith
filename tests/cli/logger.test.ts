@@ -22,25 +22,91 @@ import {
   createLogger,
   defaultLogDirectory,
   defaultLogFilePath,
+  formatLogTimestamp,
   logFileOpenFlags,
 } from "../../src/cli/logger.js";
 
+class FixedLocalDate extends Date {
+  override getFullYear(): number {
+    return 2026;
+  }
+
+  override getMonth(): number {
+    return 8;
+  }
+
+  override getDate(): number {
+    return 20;
+  }
+
+  override getHours(): number {
+    return 17;
+  }
+
+  override getMinutes(): number {
+    return 43;
+  }
+
+  override getSeconds(): number {
+    return 21;
+  }
+
+  override getMilliseconds(): number {
+    return 624;
+  }
+
+  override getTimezoneOffset(): number {
+    return 300;
+  }
+}
+
+class ShortYearDate extends FixedLocalDate {
+  override getFullYear(): number {
+    return 42;
+  }
+}
+
 void test("writes debug lines and escapes terminal controls", () => {
   const lines: string[] = [];
-  const logger = createLogger({ write: (line) => lines.push(line) });
+  const timestamp = new Date("2026-09-20T22:43:21.624Z");
+  const logger = createLogger({
+    write: (line) => lines.push(line),
+    now: () => timestamp,
+  });
 
   logger.debug("prompt\u001b[2J\u009b2J\u2028\u2029\u202eend");
   logger.debug("first\nsecond");
 
   assert.deepEqual(lines, [
-    "debug prompt\\u001b[2J\\u009b2J\\u2028\\u2029\\u202eend",
-    "debug first",
-    "debug second",
+    `${formatLogTimestamp(timestamp)} debug prompt\\u001b[2J\\u009b2J\\u2028\\u2029\\u202eend`,
+    `${formatLogTimestamp(timestamp)} debug first`,
+    `${formatLogTimestamp(timestamp)} debug second`,
   ]);
   assert.doesNotMatch(
     lines[0] ?? "",
     new RegExp(`[${String.fromCodePoint(0x1b, 0x9b, 0x2028, 0x2029, 0x202e)}]`),
   );
+});
+
+void test("timestamps each physical line independently", () => {
+  const lines: string[] = [];
+  const timestamps = [new Date("2026-09-20T22:43:21.624Z"), new Date("2026-09-20T22:43:21.625Z")];
+  const logger = createLogger({
+    write: (line) => lines.push(line),
+    now: () => timestamps.shift() ?? new Date("2026-09-20T22:43:21.625Z"),
+  });
+
+  logger.debug("first\nsecond");
+
+  assert.deepEqual(lines, [
+    `${formatLogTimestamp(new Date("2026-09-20T22:43:21.624Z"))} debug first`,
+    `${formatLogTimestamp(new Date("2026-09-20T22:43:21.625Z"))} debug second`,
+  ]);
+});
+
+void test("formats local timestamps with milliseconds and an offset", () => {
+  assert.equal(formatLogTimestamp(new FixedLocalDate()), "2026-09-20 17:43:21.624 -0500");
+  assert.equal(formatLogTimestamp(new ShortYearDate()), "0042-09-20 17:43:21.624 -0500");
 });
 
 void test("selects the macOS log directory outside the project", () => {
@@ -117,7 +183,8 @@ void test("appends logger lines to a file and closes the descriptor", () => {
   const directory = mkdtempSync(path.join(os.tmpdir(), "codesmith-log-"));
   const filePath = path.join(directory, "session.log");
   const fileLog = createFileLogWriter(filePath);
-  const logger = createLogger({ write: fileLog.write });
+  const timestamp = new Date("2026-09-20T22:43:21.624Z");
+  const logger = createLogger({ write: fileLog.write, now: () => timestamp });
 
   logger.debug("[status] thinking");
   logger.debug("[provider_request] [user] write some code");
@@ -126,7 +193,7 @@ void test("appends logger lines to a file and closes the descriptor", () => {
 
   assert.equal(
     readFileSync(filePath, "utf8"),
-    "debug [status] thinking\ndebug [provider_request] [user] write some code\n",
+    `${formatLogTimestamp(timestamp)} debug [status] thinking\n${formatLogTimestamp(timestamp)} debug [provider_request] [user] write some code\n`,
   );
 });
 
