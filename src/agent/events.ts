@@ -1,8 +1,10 @@
 import type { ApprovalKind } from "../workspace/tools.js";
 import type { ToolCall } from "../shared/types.js";
+import type { TaskContract } from "./task-contract.js";
 
 export type AgentEvent =
   | { type: "status"; phase: "thinking" | "waiting_for_approval" | "complete" }
+  | { type: "task_declared"; contract: TaskContract }
   | { type: "assistant_text"; text: string }
   | { type: "tool_proposed"; call: ToolCall }
   | { type: "tool_started"; call: ToolCall }

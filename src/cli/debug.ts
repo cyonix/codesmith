@@ -6,6 +6,8 @@ export function formatDebugEvent(event: AgentEvent): string {
   switch (event.type) {
     case "status":
       return `[status] ${event.phase}`;
+    case "task_declared":
+      return `[task_declared] ${event.contract.taskId}`;
     case "assistant_text":
       return `[assistant_text] ${previewSensitiveText(event.text)}`;
     case "tool_proposed":

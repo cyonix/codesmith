@@ -3,12 +3,23 @@ import type { AssistantResponse, ChatMessage, ToolCall, ToolDefinition } from ".
 import { endpointFor } from "./provider-endpoint.js";
 import { isRecord } from "./provider-parsing.js";
 import { ProviderClient } from "./provider-client.js";
+import type { ContinuationTransaction } from "../shared/types.js";
 import type { Fetcher, ProviderConfiguration } from "./provider-types.js";
 
 export class GeminiProvider extends ProviderClient {
+  readonly continuationTransaction: ContinuationTransaction = {
+    begin: () => this.beginContinuationTransaction(),
+    commit: () => this.commitContinuationTransaction(),
+    rollback: () => this.rollbackContinuationTransaction(),
+  };
   private readonly endpoint: URL;
   private previousInteractionId: string | undefined;
+  private previousInteractionHasToolCalls = false;
   private pendingInteractionId: string | undefined;
+  private pendingInteractionHasToolCalls = false;
+  private continuationCheckpoint:
+    | { previousInteractionId: string | undefined; previousInteractionHasToolCalls: boolean }
+    | undefined;
 
   constructor(configuration: ProviderConfiguration, fetcher: Fetcher) {
     super(configuration, fetcher);
@@ -17,6 +28,7 @@ export class GeminiProvider extends ProviderClient {
 
   async complete(messages: ChatMessage[], tools: ToolDefinition[]): Promise<AssistantResponse> {
     this.pendingInteractionId = undefined;
+    this.pendingInteractionHasToolCalls = false;
 
     const systemInstruction = messages
       .filter((message) => message.role === "system" && message.content)
@@ -35,7 +47,7 @@ export class GeminiProvider extends ProviderClient {
           ? { previous_interaction_id: this.previousInteractionId }
           : {}),
         ...(systemInstruction ? { system_instruction: systemInstruction } : {}),
-        input: geminiInteractionInput(messages),
+        input: geminiInteractionInput(messages, this.previousInteractionHasToolCalls),
         tools: tools.map((tool) => ({
           type: "function",
           name: tool.function.name,
@@ -47,16 +59,46 @@ export class GeminiProvider extends ProviderClient {
 
     const interaction = geminiInteractionResponse(await this.checkedResponse(response));
     this.pendingInteractionId = interaction.id;
+    this.pendingInteractionHasToolCalls = interaction.response.toolCalls.length > 0;
     return interaction.response;
   }
 
   acceptCompletion(): void {
     this.previousInteractionId = this.pendingInteractionId;
+    this.previousInteractionHasToolCalls = this.pendingInteractionHasToolCalls;
     this.pendingInteractionId = undefined;
+    this.pendingInteractionHasToolCalls = false;
+  }
+
+  beginContinuationTransaction(): void {
+    this.continuationCheckpoint = {
+      previousInteractionId: this.previousInteractionId,
+      previousInteractionHasToolCalls: this.previousInteractionHasToolCalls,
+    };
+    this.pendingInteractionId = undefined;
+    this.pendingInteractionHasToolCalls = false;
+  }
+
+  commitContinuationTransaction(): void {
+    this.continuationCheckpoint = undefined;
+  }
+
+  rollbackContinuationTransaction(): void {
+    if (this.continuationCheckpoint) {
+      this.previousInteractionId = this.continuationCheckpoint.previousInteractionId;
+      this.previousInteractionHasToolCalls =
+        this.continuationCheckpoint.previousInteractionHasToolCalls;
+    }
+    this.continuationCheckpoint = undefined;
+    this.pendingInteractionId = undefined;
+    this.pendingInteractionHasToolCalls = false;
   }
 }
 
-function geminiInteractionInput(messages: ChatMessage[]): unknown[] {
+function geminiInteractionInput(
+  messages: ChatMessage[],
+  includePendingFunctionResults: boolean,
+): unknown[] {
   const toolNames = new Map<string, string>();
 
   for (const message of messages) {
@@ -83,7 +125,7 @@ function geminiInteractionInput(messages: ChatMessage[]): unknown[] {
       continue;
     }
 
-    if (message.role !== "tool") continue;
+    if (message.role !== "tool" || !includePendingFunctionResults) continue;
 
     const name = message.tool_call_id ? toolNames.get(message.tool_call_id) : undefined;
     if (!name || !message.tool_call_id) {
