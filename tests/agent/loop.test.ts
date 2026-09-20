@@ -395,6 +395,41 @@ void test("tool loop retains prior prompts and creates the first project file", 
     ),
   );
 });
+void test("tool loop retains the session-start prompt after history compaction", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const initialPrompt = "write me some surprise code in go";
+  const finalPrompt = "What programming language did I ask for first?";
+  const provider = new MockProvider(
+    Array.from({ length: 10 }, (_, index) => ({
+      content: `Completed turn ${index}.`,
+      toolCalls: [],
+    })),
+    true,
+    false,
+  );
+  const loop = new AgentLoop(provider, await ToolExecutor.create(root, true));
+
+  await loop.run(initialPrompt);
+  for (let index = 0; index < 8; index += 1) await loop.run(`Follow-up turn ${index}.`);
+  await loop.run(finalPrompt);
+
+  let finalRequest: ChatMessage[] | undefined;
+  for (let index = provider.messages.length - 1; index >= 0; index -= 1) {
+    const messages = provider.messages[index];
+    if (messages?.some((message) => message.role === "user" && message.content === finalPrompt)) {
+      finalRequest = messages;
+      break;
+    }
+  }
+  assert.ok(finalRequest);
+  assert.ok(
+    finalRequest.some(
+      (message) =>
+        message.role === "user" && message.content === `Session-start request:\n${initialPrompt}`,
+    ),
+  );
+});
 void test("tool loop interprets yes as confirmation of the preceding file-removal question", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
   context.after(async () => rm(root, { recursive: true, force: true }));
@@ -596,6 +631,52 @@ void test("does not replay consumed Gemini tool results after history compaction
     { type: "user_input", content: "Inspect it again." },
   ]);
 });
+void test("preserves session-start context in Gemini declaration input after compaction", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const model = modelCatalog.find((entry) => entry.protocol === "gemini");
+  assert.ok(model);
+  const initialPrompt = "write me some surprise code in go";
+  const finalPrompt = "What programming language did I ask for first?";
+  const requestBodies: string[] = [];
+  const provider = new ModelProvider({ model, apiKey: "test-key" }, (_input, init) => {
+    if (typeof init?.body !== "string") throw new Error("Expected a string request body.");
+    requestBodies.push(init.body);
+    const requestNumber = requestBodies.length;
+    const steps =
+      requestNumber % 2 === 1
+        ? [
+            {
+              type: "function_call",
+              id: `task-${requestNumber}`,
+              name: "declare_task",
+              arguments: {
+                goal: "Answer the request.",
+                completionCriteria: ["The requested result is returned."],
+              },
+            },
+          ]
+        : [{ type: "model_output", content: [{ type: "text", text: "Completed." }] }];
+    return Promise.resolve(Response.json({ id: `interaction-${requestNumber}`, steps }));
+  });
+  const loop = new AgentLoop(provider, await ToolExecutor.create(root, true));
+
+  await loop.run(initialPrompt);
+  for (let index = 0; index < 3; index += 1) await loop.run(`Follow-up turn ${index}.`);
+  await loop.run(finalPrompt);
+  await loop.run("What should I do next?");
+
+  const declarationPayloads = requestBodies
+    .filter((_body, index) => index % 2 === 0)
+    .map((body) => JSON.parse(body) as { input: Array<{ type: string; content?: string }> });
+  const recoveredContextPayloads = declarationPayloads.filter((payload) =>
+    payload.input.some((input) => input.content === `Session-start request:\n${initialPrompt}`),
+  );
+  assert.equal(recoveredContextPayloads.length, 1);
+  assert.deepEqual(declarationPayloads.at(-1)?.input, [
+    { type: "user_input", content: "What should I do next?" },
+  ]);
+});
 
 void test("retrieves prior failed tool outcomes and final decisions", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
@@ -772,20 +853,25 @@ void test("omits results when an assistant response reuses a tool call ID", asyn
 class MockProvider implements ChatProvider {
   readonly messages: ChatMessage[][] = [];
   readonly requestedTools: ToolDefinition[][] = [];
-  readonly continuationTransaction = {
-    begin: () => {},
-    commit: () => {},
-    rollback: () => {
-      this.rollbackCount += 1;
-    },
-  };
+  readonly continuationTransaction: ChatProvider["continuationTransaction"];
   private index = 0;
   acceptedCompletions = 0;
   rollbackCount = 0;
   constructor(
     private readonly responses: AssistantResponse[],
     private readonly autoDeclare = true,
-  ) {}
+    stateful = true,
+  ) {
+    this.continuationTransaction = stateful
+      ? {
+          begin: () => {},
+          commit: () => {},
+          rollback: () => {
+            this.rollbackCount += 1;
+          },
+        }
+      : undefined;
+  }
   complete(messages: ChatMessage[], tools: ToolDefinition[]): Promise<AssistantResponse> {
     this.messages.push([...messages]);
     this.requestedTools.push(tools);
