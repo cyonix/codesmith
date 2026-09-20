@@ -19,6 +19,12 @@ approves them.
 CodeSmith provides Agent Core without a user interface. You can use it from a
 CLI, desktop client, or web client. The `codesmith` command uses Agent Core.
 
+Before a submission can use workspace tools, CodeSmith declares a bounded task
+contract with the goal and observable completion criteria. Agent Core clients
+receive this contract through the `task_declared` event and can show it in their
+own interface. The CLI displays the goal and a numbered list of criteria without
+an approval prompt.
+
 ## Capabilities
 
 - Use projects in Swift, JavaScript, TypeScript, Python, Rust, and Go.
@@ -84,6 +90,9 @@ The log records redacted agent events and model-request previews. Each preview
 is limited to 4 KiB. The current session log stops at 16 MiB. It omits
 payloads from conventional secret files. CodeSmith does not delete old log
 files. Manage retention in that directory yourself.
+
+Task-contract goals and completion criteria in debug events use the same
+credential redaction as other model-derived text.
 
 ## Documentation
 

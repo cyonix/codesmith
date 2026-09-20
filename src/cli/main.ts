@@ -18,6 +18,7 @@ import {
 import { promptForApiKey, selectModel } from "./setup.js";
 import { CodeSmithError } from "../shared/errors.js";
 import { ModelProvider } from "../providers/provider.js";
+import { formatTaskContract } from "./render.js";
 
 async function main(): Promise<void> {
   const options = parseOptions(process.argv.slice(2));
@@ -95,6 +96,10 @@ async function handleEvent(
   session: AgentSession,
   readline: ReturnType<typeof createInterface>,
 ): Promise<void> {
+  if (event.type === "task_declared") {
+    stdout.write(`\n${formatTaskContract(event.contract)}\n`);
+    return;
+  }
   if (event.type !== "approval_requested") return;
 
   const label =

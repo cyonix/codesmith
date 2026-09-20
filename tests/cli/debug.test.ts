@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { formatDebugEvent } from "../../src/cli/debug.js";
+import { previewMaximumBytes } from "../../src/shared/redaction.js";
 
 void test("formats tagged debug lines for all agent events", () => {
   assert.equal(formatDebugEvent({ type: "status", phase: "thinking" }), "[status] thinking");
@@ -13,7 +14,7 @@ void test("formats tagged debug lines for all agent events", () => {
         completionCriteria: ["The requested result is returned."],
       },
     }),
-    "[task_declared] task-123",
+    "[task_declared] task-123 goal=Inspect the project. criteria=1. The requested result is returned.",
   );
   assert.equal(
     formatDebugEvent({ type: "assistant_text", text: "Created HelloWorld.swift." }),
@@ -112,6 +113,18 @@ void test("formats tagged debug lines for all agent events", () => {
 });
 
 void test("redacts credentials and omits secret-file payloads", () => {
+  const taskLine = formatDebugEvent({
+    type: "task_declared",
+    contract: {
+      taskId: "task-secret",
+      goal: "Use apiKey: sk-abcdefghijklmnopqrstuvwxyz",
+      completionCriteria: ["Keep password=criterion-secret private."],
+    },
+  });
+  assert.match(taskLine, /^\[task_declared\] task-secret/);
+  assert.match(taskLine, /\[REDACTED\]/);
+  assert.match(taskLine, /criteria=1\. Keep \[REDACTED\]/);
+  assert.doesNotMatch(taskLine, /sk-abcdefghijklmnopqrstuvwxyz/);
   assert.equal(
     formatDebugEvent({
       type: "approval_requested",
@@ -228,4 +241,32 @@ void test("redacts credentials and omits secret-file payloads", () => {
     assert.doesNotMatch(line, /opaque-value/);
     assert.doesNotMatch(line, /omitted secret file/);
   }
+});
+
+void test("redacts task-contract completion criteria", () => {
+  const taskLine = formatDebugEvent({
+    type: "task_declared",
+    contract: {
+      taskId: "task-criteria-secret",
+      goal: "Inspect the project.",
+      completionCriteria: ["API key: private-value"],
+    },
+  });
+
+  assert.match(taskLine, /criteria=1\. API key \[REDACTED\]/);
+  assert.doesNotMatch(taskLine, /private-value/);
+});
+
+void test("bounds the complete task-contract debug payload", () => {
+  const taskLine = formatDebugEvent({
+    type: "task_declared",
+    contract: {
+      taskId: "task-large",
+      goal: "Inspect the project.",
+      completionCriteria: Array.from({ length: 8 }, () => "é".repeat(300)),
+    },
+  });
+  const prefix = "[task_declared] task-large ";
+
+  assert.ok(Buffer.byteLength(taskLine.slice(prefix.length), "utf8") <= previewMaximumBytes);
 });

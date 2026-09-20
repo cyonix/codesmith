@@ -1,13 +1,21 @@
 import type { AgentEvent } from "../agent/events.js";
-import { previewSensitiveText } from "../shared/redaction.js";
+import { previewSensitiveText, redactSensitiveText, truncatePreview } from "../shared/redaction.js";
 import { isSensitiveToolPayload, omittedSecretPreview } from "../shared/secret-files.js";
 
 export function formatDebugEvent(event: AgentEvent): string {
   switch (event.type) {
     case "status":
       return `[status] ${event.phase}`;
-    case "task_declared":
-      return `[task_declared] ${event.contract.taskId}`;
+    case "task_declared": {
+      const redactedGoal = redactSensitiveText(event.contract.goal);
+      const redactedCriteria = event.contract.completionCriteria.map(
+        (criterion, index) => `${index + 1}. ${redactSensitiveText(criterion)}`,
+      );
+      const contractPreview = truncatePreview(
+        `goal=${redactedGoal} criteria=${redactedCriteria.join(" | ")}`,
+      );
+      return `[task_declared] ${event.contract.taskId} ${contractPreview}`;
+    }
     case "assistant_text":
       return `[assistant_text] ${previewSensitiveText(event.text)}`;
     case "tool_proposed":

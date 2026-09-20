@@ -51,7 +51,11 @@ export function redactSensitiveText(value: string): string {
 export const previewMaximumBytes = 4096;
 
 export function previewSensitiveText(value: string): string {
-  return truncateUtf8(redactSensitiveText(value).replace(/\s+/g, " ").trim(), previewMaximumBytes);
+  return truncatePreview(redactSensitiveText(value));
+}
+
+export function truncatePreview(value: string): string {
+  return truncateUtf8(value.replace(/\s+/g, " ").trim(), previewMaximumBytes);
 }
 
 function truncateUtf8(value: string, maximumBytes: number): string {

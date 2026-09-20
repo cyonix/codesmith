@@ -102,9 +102,12 @@ sequenceDiagram
     Memory->>Cache: download, verify, and install model
   end
   Session->>Agent: run(prompt)
+  Agent->>Provider: declare_task only
+  Provider-->>Agent: bounded task contract
+  Agent-->>Client: task_declared event
   Agent->>Memory: retrieve relevant episodes
   Memory-->>Agent: bounded untrusted evidence
-  Agent->>Provider: send prompt and evidence guard
+  Agent->>Provider: send prompt, evidence guard, and workspace tools
   Provider->>Model: request completion
   Model-->>Provider: text or tool calls
   Provider-->>Agent: response
@@ -156,6 +159,9 @@ const session = await AgentSession.create({
 });
 
 const unsubscribe = session.subscribe((event) => {
+  if (event.type === "task_declared") {
+    showTaskContract(event.contract.goal, event.contract.completionCriteria);
+  }
   if (event.type === "approval_requested") {
     showApprovalDialog(event.summary, (approved) => {
       session.approve(event.requestId, approved);
@@ -195,6 +201,7 @@ Google's retention terms before you choose a Gemini model.
 | Event                | Meaning                                                        |
 | -------------------- | -------------------------------------------------------------- |
 | `status`             | The agent is `thinking`, `waiting_for_approval`, or `complete` |
+| `task_declared`      | A bounded goal and completion criteria were accepted           |
 | `assistant_text`     | The final text response from the agent                         |
 | `tool_proposed`      | The model asked to call a tool                                 |
 | `tool_started`       | A local tool is about to run                                   |
@@ -219,15 +226,35 @@ messages, timelines, diff previews, and approval dialogs.
 ## 4. Request lifecycle
 
 1. A client sends a prompt to an `AgentSession`.
-2. The core sends limited conversation history and tool definitions to the
-   provider.
-3. The model returns text or tool calls.
-4. The sandboxed executor runs approved tool calls on the local machine.
-5. The tool results return to the model until it gives a final response.
+2. The core asks the provider to call `declare_task` with one goal and 1 to 8
+   observable completion criteria. The declaration is structurally validated,
+   bounded, immutable for the submission, and retried at most once.
+3. After a valid declaration, the core emits `task_declared` and retrieves
+   bounded episodic evidence, if enabled.
+4. The core sends the prompt, declaration result, evidence guard, and
+   workspace tool definitions to the provider.
+5. The model returns text or tool calls.
+6. The sandboxed executor runs approved tool calls on the local machine.
+7. The tool results return to the model until it gives a final response.
 
 CodeSmith keeps conversation context for the current session. It interprets
 brief replies such as `yes`, `no`, `proceed`, and `do it` using the agent's most
 recent unresolved question.
+
+### Task contracts
+
+Every submission must declare a task contract before workspace tools or
+episodic-memory evidence are available. A contract contains:
+
+- A non-empty goal of at most 500 Unicode code points.
+- One to eight unique completion criteria.
+- Criteria of at most 300 Unicode code points each.
+
+The contract receives an immutable task ID and remains fixed for the
+submission. Clients receive it through `task_declared`; the CLI presents the
+goal and numbered criteria without treating the declaration as an approval
+boundary. Debug logs include the task ID, goal, and criteria through the shared
+credential-redaction and bounded-preview path.
 
 ### Episodic memory
 
@@ -262,7 +289,7 @@ memory.
 
 CodeSmith follows these principles when it runs an agent loop.
 
-- [ ] **Clear goals and completion criteria:** State the goal and how to tell
+- [x] **Clear goals and completion criteria:** State the goal and how to tell
       when the work is complete before acting.
 - [ ] **Plan before side effects:** Make a clear plan that can change, then
       take the smallest useful next action.
