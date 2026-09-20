@@ -85,6 +85,7 @@ export class AgentLoop {
 
       const response = await this.provider.complete(providerMessages, tools);
       this.assertOpen();
+      const responseContent = normalizeAssistantText(response.content);
 
       if (response.toolCalls.length > 0 && toolRounds >= this.maximumToolRounds) {
         throw new CodeSmithError(
@@ -107,16 +108,16 @@ export class AgentLoop {
 
       this.messages.push({
         role: "assistant",
-        content: response.content,
+        content: responseContent,
         tool_calls: toolCalls,
       });
       this.provider.acceptCompletion?.();
 
       if (toolCalls.length === 0) {
-        if (response.content) await this.memory?.recordAssistant(response.content);
-        if (response.content) this.emit({ type: "assistant_text", text: response.content });
+        if (responseContent) await this.memory?.recordAssistant(responseContent);
+        if (responseContent) this.emit({ type: "assistant_text", text: responseContent });
         this.emit({ type: "status", phase: "complete" });
-        return response.content ?? "";
+        return responseContent ?? "";
       }
 
       toolRounds += 1;
@@ -178,6 +179,7 @@ export class AgentLoop {
 
       const response = await this.provider.complete(this.messages, [taskContractToolDefinition]);
       this.assertOpen();
+      const responseContent = normalizeAssistantText(response.content);
 
       const declarationCalls = response.toolCalls.map((call, index) =>
         normalizeToolCall(call, index),
@@ -199,7 +201,7 @@ export class AgentLoop {
           this.assertHistoryCapacity(2);
           this.messages.push({
             role: "assistant",
-            content: response.content,
+            content: responseContent,
             tool_calls: declarationCalls,
           });
           this.provider.acceptCompletion?.();
@@ -228,7 +230,7 @@ export class AgentLoop {
       this.assertHistoryCapacity(additionalMessages);
       this.messages.push({
         role: "assistant",
-        content: response.content,
+        content: responseContent,
         tool_calls: declarationCalls,
       });
       this.provider.acceptCompletion?.();
@@ -427,6 +429,14 @@ function normalizeToolCall(call: ToolCall, index: number): ToolCall {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizeAssistantText(content: string | null | undefined): string | null | undefined {
+  if (!content) return content;
+
+  const trimmed = content.trim();
+  const duplicate = trimmed.match(/^([\s\S]+?)\r?\n\s*\r?\n\1$/);
+  return duplicate?.[1]?.trimEnd() ?? content;
 }
 
 function findToolCall(
