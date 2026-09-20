@@ -256,51 +256,146 @@ void test("preserves Gemini declaration results before retrieved memory input", 
   ]);
 });
 
-void test("resets Gemini continuation after a failed submission", async () => {
+void test("restores Gemini continuation after a failed submission", async () => {
   const requestBodies: string[] = [];
   const provider = new ModelProvider(configuration("gemini"), (_input, init) => {
     requestBodies.push(readRequestBody(init));
+    const interactionNumber = requestBodies.length;
     return Promise.resolve(
-      Response.json({
-        id: `interaction-${requestBodies.length}`,
-        steps: [
-          {
-            type: "function_call",
-            id: `task-${requestBodies.length}`,
-            name: "declare_task",
-            arguments: {
-              goal: "Inspect the project.",
-              completionCriteria: ["The requested result is returned."],
-            },
-          },
-        ],
-      }),
+      interactionNumber === 1
+        ? Response.json({
+            id: "interaction-1",
+            steps: [{ type: "model_output", content: [{ type: "text", text: "Prior." }] }],
+          })
+        : Response.json({
+            id: `interaction-${interactionNumber}`,
+            steps: [
+              {
+                type: "function_call",
+                id: `task-${interactionNumber}`,
+                name: "declare_task",
+                arguments: {
+                  goal: "Inspect the project.",
+                  completionCriteria: ["The requested result is returned."],
+                },
+              },
+            ],
+          }),
     );
   });
 
-  const first = await provider.complete([{ role: "user", content: "Old task." }], tools);
+  await provider.complete([{ role: "user", content: "Prior task." }], tools);
+  provider.acceptCompletion();
+  provider.continuationTransaction?.begin();
+  const failed = await provider.complete([{ role: "user", content: "Old task." }], tools);
   provider.acceptCompletion();
   await provider.complete(
     [
       { role: "user", content: "Old task." },
-      { role: "assistant", content: first.content, tool_calls: first.toolCalls },
+      { role: "assistant", content: failed.content, tool_calls: failed.toolCalls },
       {
         role: "tool",
-        tool_call_id: first.toolCalls[0]?.id,
+        tool_call_id: failed.toolCalls[0]?.id,
         content: '{"error":"invalid"}',
       },
     ],
     tools,
   );
-  provider.resetContinuation();
+  provider.acceptCompletion();
+  provider.continuationTransaction?.rollback();
   await provider.complete([{ role: "user", content: "New task." }], tools);
 
-  const nextPayload = JSON.parse(requestBodies[2] ?? "") as {
-    previous_interaction_id?: string;
+  const nextPayload = JSON.parse(requestBodies[3] ?? "") as {
+    previous_interaction_id: string;
     input: Array<{ type: string; content?: string }>;
   };
-  assert.equal(nextPayload.previous_interaction_id, undefined);
+  assert.equal(nextPayload.previous_interaction_id, "interaction-1");
   assert.deepEqual(nextPayload.input, [{ type: "user_input", content: "New task." }]);
+});
+
+void test("restores Gemini tool-result continuation state after a failed submission", async () => {
+  const requestBodies: string[] = [];
+  const provider = new ModelProvider(configuration("gemini"), (_input, init) => {
+    requestBodies.push(readRequestBody(init));
+    const interactionNumber = requestBodies.length;
+    return Promise.resolve(
+      interactionNumber === 1
+        ? Response.json({
+            id: "interaction-1",
+            steps: [
+              {
+                type: "function_call",
+                id: "read-1",
+                name: "read_file",
+                arguments: { path: "README.md" },
+              },
+            ],
+          })
+        : Response.json({
+            id: `interaction-${interactionNumber}`,
+            steps: [
+              {
+                type: "function_call",
+                id: `task-${interactionNumber}`,
+                name: "declare_task",
+                arguments: {
+                  goal: "Inspect the project.",
+                  completionCriteria: ["The requested result is returned."],
+                },
+              },
+            ],
+          }),
+    );
+  });
+
+  const first = await provider.complete([{ role: "user", content: "Prior task." }], tools);
+  provider.acceptCompletion();
+  provider.continuationTransaction?.begin();
+  const failed = await provider.complete([{ role: "user", content: "Old task." }], tools);
+  provider.acceptCompletion();
+  await provider.complete(
+    [
+      { role: "user", content: "Old task." },
+      { role: "assistant", content: failed.content, tool_calls: failed.toolCalls },
+      {
+        role: "tool",
+        tool_call_id: failed.toolCalls[0]?.id,
+        content: '{"error":"invalid"}',
+      },
+    ],
+    tools,
+  );
+  provider.continuationTransaction?.rollback();
+  await provider.complete(
+    [
+      { role: "user", content: "Prior task." },
+      { role: "assistant", content: first.content, tool_calls: first.toolCalls },
+      { role: "tool", tool_call_id: "read-1", content: '{"content":"Prior result"}' },
+      { role: "user", content: "New task." },
+    ],
+    tools,
+  );
+
+  const nextPayload = JSON.parse(requestBodies[3] ?? "") as {
+    previous_interaction_id: string;
+    input: Array<{
+      type: string;
+      name?: string;
+      call_id?: string;
+      content?: string;
+      result?: Array<{ type: string; text: string }>;
+    }>;
+  };
+  assert.equal(nextPayload.previous_interaction_id, "interaction-1");
+  assert.deepEqual(nextPayload.input, [
+    {
+      type: "function_result",
+      name: "read_file",
+      call_id: "read-1",
+      result: [{ type: "text", text: '{"content":"Prior result"}' }],
+    },
+    { type: "user_input", content: "New task." },
+  ]);
 });
 
 void test("includes a bounded redacted provider error detail for HTTP failures", async () => {

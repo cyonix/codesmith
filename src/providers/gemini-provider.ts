@@ -3,14 +3,23 @@ import type { AssistantResponse, ChatMessage, ToolCall, ToolDefinition } from ".
 import { endpointFor } from "./provider-endpoint.js";
 import { isRecord } from "./provider-parsing.js";
 import { ProviderClient } from "./provider-client.js";
+import type { ContinuationTransaction } from "../shared/types.js";
 import type { Fetcher, ProviderConfiguration } from "./provider-types.js";
 
 export class GeminiProvider extends ProviderClient {
+  readonly continuationTransaction: ContinuationTransaction = {
+    begin: () => this.beginContinuationTransaction(),
+    commit: () => this.commitContinuationTransaction(),
+    rollback: () => this.rollbackContinuationTransaction(),
+  };
   private readonly endpoint: URL;
   private previousInteractionId: string | undefined;
   private previousInteractionHasToolCalls = false;
   private pendingInteractionId: string | undefined;
   private pendingInteractionHasToolCalls = false;
+  private continuationCheckpoint:
+    | { previousInteractionId: string | undefined; previousInteractionHasToolCalls: boolean }
+    | undefined;
 
   constructor(configuration: ProviderConfiguration, fetcher: Fetcher) {
     super(configuration, fetcher);
@@ -61,9 +70,26 @@ export class GeminiProvider extends ProviderClient {
     this.pendingInteractionHasToolCalls = false;
   }
 
-  resetContinuation(): void {
-    this.previousInteractionId = undefined;
-    this.previousInteractionHasToolCalls = false;
+  beginContinuationTransaction(): void {
+    this.continuationCheckpoint = {
+      previousInteractionId: this.previousInteractionId,
+      previousInteractionHasToolCalls: this.previousInteractionHasToolCalls,
+    };
+    this.pendingInteractionId = undefined;
+    this.pendingInteractionHasToolCalls = false;
+  }
+
+  commitContinuationTransaction(): void {
+    this.continuationCheckpoint = undefined;
+  }
+
+  rollbackContinuationTransaction(): void {
+    if (this.continuationCheckpoint) {
+      this.previousInteractionId = this.continuationCheckpoint.previousInteractionId;
+      this.previousInteractionHasToolCalls =
+        this.continuationCheckpoint.previousInteractionHasToolCalls;
+    }
+    this.continuationCheckpoint = undefined;
     this.pendingInteractionId = undefined;
     this.pendingInteractionHasToolCalls = false;
   }

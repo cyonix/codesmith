@@ -180,7 +180,50 @@ void test("abandons failed declaration state before the next submission", async 
     nextDeclarationRequest?.some((message) => message.role === "tool"),
     false,
   );
-  assert.equal(provider.resetCount, 1);
+  assert.equal(provider.rollbackCount, 1);
+});
+void test("abandons declaration state when memory retrieval fails", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const provider = new MockProvider([{ content: "Recovered.", toolCalls: [] }], true);
+  const memory = new EpisodicMemory(
+    configureSemanticMemory(true),
+    new LoopMemoryEvents(),
+    { create: () => Promise.resolve(new FlakyEmbeddingModel()) },
+    { install: () => Promise.resolve("/fake-model") },
+  );
+  await memory.initialize(() => Promise.resolve(true));
+  const loop = new AgentLoop(
+    provider,
+    await ToolExecutor.create(root, true),
+    12,
+    () => {},
+    () => false,
+    memory,
+  );
+
+  await assert.rejects(() => loop.run("Old task."), /episodic-memory subsystem failed/);
+  memory.clear();
+  assert.equal(await loop.run("New task."), "Recovered.");
+
+  const nextDeclarationRequest = provider.messages[1];
+  assert.ok(nextDeclarationRequest);
+  assert.ok(
+    nextDeclarationRequest?.some(
+      (message) => message.role === "user" && message.content === "New task.",
+    ),
+  );
+  assert.equal(
+    nextDeclarationRequest?.some(
+      (message) => message.role === "user" && message.content === "Old task.",
+    ),
+    false,
+  );
+  assert.equal(
+    nextDeclarationRequest?.some((message) => message.role === "tool"),
+    false,
+  );
+  assert.equal(provider.rollbackCount, 1);
 });
 void test("does not execute mixed declaration and workspace calls", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
@@ -701,8 +744,16 @@ void test("omits results when an assistant response reuses a tool call ID", asyn
 class MockProvider implements ChatProvider {
   readonly messages: ChatMessage[][] = [];
   readonly requestedTools: ToolDefinition[][] = [];
+  readonly continuationTransaction = {
+    begin: () => {},
+    commit: () => {},
+    rollback: () => {
+      this.rollbackCount += 1;
+    },
+  };
   private index = 0;
   acceptedCompletions = 0;
+  rollbackCount = 0;
   constructor(
     private readonly responses: AssistantResponse[],
     private readonly autoDeclare = true,
@@ -739,7 +790,14 @@ class MockProvider implements ChatProvider {
 
 class FailedDeclarationProvider implements ChatProvider {
   readonly messages: ChatMessage[][] = [];
-  resetCount = 0;
+  readonly continuationTransaction = {
+    begin: () => {},
+    commit: () => {},
+    rollback: () => {
+      this.rollbackCount += 1;
+    },
+  };
+  rollbackCount = 0;
   private declarationAttempts = 0;
 
   complete(messages: ChatMessage[], tools: ToolDefinition[]): Promise<AssistantResponse> {
@@ -763,10 +821,6 @@ class FailedDeclarationProvider implements ChatProvider {
     }
     return Promise.resolve({ content: "Completed.", toolCalls: [] });
   }
-
-  resetContinuation(): void {
-    this.resetCount += 1;
-  }
 }
 
 function taskDeclarationCall(suffix = ""): {
@@ -787,6 +841,18 @@ function taskDeclarationCall(suffix = ""): {
 
 class ConstantEmbeddingModel implements EmbeddingModel {
   embed(): Promise<number[]> {
+    return Promise.resolve([1, 0]);
+  }
+}
+
+class FlakyEmbeddingModel implements EmbeddingModel {
+  private failed = false;
+
+  embed(): Promise<number[]> {
+    if (!this.failed) {
+      this.failed = true;
+      return Promise.reject(new Error("embedding failed"));
+    }
     return Promise.resolve([1, 0]);
   }
 }

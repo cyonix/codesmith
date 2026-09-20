@@ -3,6 +3,7 @@ import type {
   AssistantResponse,
   ChatMessage,
   ChatProvider,
+  ContinuationTransaction,
   ToolDefinition,
 } from "../shared/types.js";
 import { AnthropicProvider } from "./anthropic-provider.js";
@@ -15,6 +16,7 @@ import type { ProviderConfiguration } from "./provider-types.js";
 
 export class ModelProvider implements ChatProvider {
   private readonly implementation: ProviderImplementation;
+  readonly continuationTransaction: ContinuationTransaction | undefined;
 
   constructor(configuration: ProviderConfiguration, fetcher: Fetcher = fetch) {
     if (!configuration.apiKey.trim()) {
@@ -37,6 +39,7 @@ export class ModelProvider implements ChatProvider {
           "The selected provider protocol is not supported.",
         );
     }
+    this.continuationTransaction = this.implementation.continuationTransaction;
   }
 
   complete(messages: ChatMessage[], tools: ToolDefinition[]): Promise<AssistantResponse> {
@@ -45,9 +48,5 @@ export class ModelProvider implements ChatProvider {
 
   acceptCompletion(): void {
     this.implementation.acceptCompletion?.();
-  }
-
-  resetContinuation(): void {
-    this.implementation.resetContinuation?.();
   }
 }

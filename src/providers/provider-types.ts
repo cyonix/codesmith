@@ -1,4 +1,9 @@
-import type { AssistantResponse, ChatMessage, ToolDefinition } from "../shared/types.js";
+import type {
+  AssistantResponse,
+  ChatMessage,
+  ContinuationTransaction,
+  ToolDefinition,
+} from "../shared/types.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 
 export type Fetcher = (input: URL | RequestInfo, init?: RequestInit) => Promise<Response>;
@@ -11,5 +16,5 @@ export interface ProviderConfiguration {
 export interface ProviderImplementation {
   complete(messages: ChatMessage[], tools: ToolDefinition[]): Promise<AssistantResponse>;
   acceptCompletion?(): void;
-  resetContinuation?(): void;
+  readonly continuationTransaction?: ContinuationTransaction;
 }

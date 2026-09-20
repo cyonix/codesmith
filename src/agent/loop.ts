@@ -36,17 +36,28 @@ export class AgentLoop {
   ) {}
 
   async run(prompt: string): Promise<string> {
-    this.trimHistory();
-    const submissionStart = this.messages.length;
-    const priorAssistantText = this.priorAssistantText();
-    this.messages.push({ role: "user", content: prompt });
+    const previousMessages = this.messages.slice();
+    const continuationTransaction = this.provider.continuationTransaction;
+    continuationTransaction?.begin();
+    let submissionReady = false;
     try {
-      await this.declareTask();
+      return await this.runSubmission(prompt, () => {
+        submissionReady = true;
+      });
     } catch (error) {
-      this.messages.splice(submissionStart);
-      this.provider.resetContinuation?.();
+      if (!submissionReady) {
+        this.messages.splice(0, this.messages.length, ...previousMessages);
+        continuationTransaction?.rollback();
+      }
       throw error;
     }
+  }
+
+  private async runSubmission(prompt: string, markReady: () => void): Promise<string> {
+    this.trimHistory();
+    const priorAssistantText = this.priorAssistantText();
+    this.messages.push({ role: "user", content: prompt });
+    await this.declareTask();
 
     const memoryContext = this.memory
       ? await this.memory.retrieve(
@@ -56,6 +67,8 @@ export class AgentLoop {
         )
       : undefined;
     this.memory?.startSubmission();
+    this.provider.continuationTransaction?.commit();
+    markReady();
 
     let toolCallsUsed = 0;
     let toolRounds = 0;

@@ -23,8 +23,14 @@ export interface AssistantResponse {
   toolCalls: ToolCall[];
 }
 
+export interface ContinuationTransaction {
+  begin(): void;
+  commit(): void;
+  rollback(): void;
+}
+
 export interface ChatProvider {
   complete(messages: ChatMessage[], tools: ToolDefinition[]): Promise<AssistantResponse>;
   acceptCompletion?(): void;
-  resetContinuation?(): void;
+  readonly continuationTransaction?: ContinuationTransaction;
 }
