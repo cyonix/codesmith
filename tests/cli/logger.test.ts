@@ -60,6 +60,12 @@ class FixedLocalDate extends Date {
   }
 }
 
+class ShortYearDate extends FixedLocalDate {
+  override getFullYear(): number {
+    return 42;
+  }
+}
+
 void test("writes debug lines and escapes terminal controls", () => {
   const lines: string[] = [];
   const timestamp = new Date("2026-09-20T22:43:21.624Z");
@@ -100,6 +106,7 @@ void test("timestamps each physical line independently", () => {
 
 void test("formats local timestamps with milliseconds and an offset", () => {
   assert.equal(formatLogTimestamp(new FixedLocalDate()), "2026-09-20 17:43:21.624 -0500");
+  assert.equal(formatLogTimestamp(new ShortYearDate()), "0042-09-20 17:43:21.624 -0500");
 });
 
 void test("selects the macOS log directory outside the project", () => {

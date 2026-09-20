@@ -48,7 +48,7 @@ export function formatLogTimestamp(date: Date): string {
   const offsetRemainderMinutes = absoluteOffsetMinutes % 60;
 
   return [
-    `${date.getFullYear()}-${padNumber(date.getMonth() + 1)}-${padNumber(date.getDate())}`,
+    `${padNumber(date.getFullYear(), 4)}-${padNumber(date.getMonth() + 1)}-${padNumber(date.getDate())}`,
     `${padNumber(date.getHours())}:${padNumber(date.getMinutes())}:${padNumber(date.getSeconds())}.${padNumber(date.getMilliseconds(), 3)}`,
     `${offsetSign}${padNumber(offsetHours)}${padNumber(offsetRemainderMinutes)}`,
   ].join(" ");
