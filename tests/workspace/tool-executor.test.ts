@@ -42,6 +42,17 @@ void test("creates a root file after approval", async (context) => {
     'print("Hello, World!")\n',
   );
 });
+void test("creates a root file with content larger than the old fragment limit", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const content = "x".repeat(501);
+  const tools = await ToolExecutor.create(root, false, () => Promise.resolve(true));
+
+  const result = await tools.execute(call("create_file", { path: "large.txt", content }));
+
+  assert.deepEqual(JSON.parse(result), { status: "created", path: "large.txt" });
+  assert.equal(await readFile(path.join(root, "large.txt"), "utf8"), content);
+});
 void test("deletes a root file after approval", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
   context.after(async () => rm(root, { recursive: true, force: true }));
@@ -171,6 +182,22 @@ void test("writes an approved patch through the constrained descriptor", async (
   );
   assert.deepEqual(JSON.parse(result), { status: "applied", path: "Sources/source.swift" });
   assert.equal(await readFile(filePath, "utf8"), "let value = 2");
+});
+void test("applies patch fragments larger than the old fragment limit", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const filePath = path.join(root, "source.swift");
+  const expected = "old".repeat(200);
+  const replacement = "new".repeat(200);
+  await writeFile(filePath, `prefix ${expected} suffix`);
+  const tools = await ToolExecutor.create(root, false, () => Promise.resolve(true));
+
+  const result = await tools.execute(
+    call("apply_patch", { path: "source.swift", expected_content: expected, replacement }),
+  );
+
+  assert.deepEqual(JSON.parse(result), { status: "applied", path: "source.swift" });
+  assert.equal(await readFile(filePath, "utf8"), `prefix ${replacement} suffix`);
 });
 void test("rejects a hard-linked patch target and preserves its external source", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));

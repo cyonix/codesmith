@@ -26,7 +26,6 @@ import type { JsonValue, ToolCall, ToolDefinition } from "../shared/types.js";
 
 const MAXIMUM_TEXT_BYTES = 10_000_000;
 const MAXIMUM_COMMAND_OUTPUT_BYTES = 20_000;
-const MAXIMUM_PATCH_FRAGMENT_CHARACTERS = 500;
 
 const trustedCommandDirectories = [
   "/usr/bin",
@@ -180,15 +179,8 @@ export class ToolExecutor {
 
     assertRootFilePath(requestedPath, "create_file");
 
-    if (
-      content.length > MAXIMUM_PATCH_FRAGMENT_CHARACTERS ||
-      Buffer.byteLength(content, "utf8") > MAXIMUM_TEXT_BYTES
-    ) {
-      throw new SwiftCoderAIError(
-        "arguments",
-        "New-file content must be at most 500 characters and 1 MB.",
-      );
-    }
+    if (Buffer.byteLength(content, "utf8") > MAXIMUM_TEXT_BYTES)
+      throw new SwiftCoderAIError("arguments", "New-file content must be at most 10 MB.");
 
     const filePath = this.permitted(await this.sandbox.resolve(requestedPath));
 
@@ -280,15 +272,6 @@ export class ToolExecutor {
     const requestedPath = requiredString(argumentsValue.path, "path");
     const expected = requiredString(argumentsValue.expected_content, "expected_content");
     const replacement = requiredString(argumentsValue.replacement, "replacement");
-
-    if (
-      expected.length > MAXIMUM_PATCH_FRAGMENT_CHARACTERS ||
-      replacement.length > MAXIMUM_PATCH_FRAGMENT_CHARACTERS
-    )
-      throw new SwiftCoderAIError(
-        "arguments",
-        "Patch fragments must be at most 500 characters so the full change can be approved.",
-      );
 
     const filePath = this.permitted(await this.sandbox.resolve(requestedPath));
     await assertPatchableText(filePath);
