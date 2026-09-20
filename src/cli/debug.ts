@@ -21,9 +21,10 @@ export function formatDebugEvent(event: AgentEvent): string {
     }
     case "plan_revised": {
       const plan = event.plan.map((step, index) => `${index + 1}. ${redactSensitiveText(step)}`);
-      return `[plan_revised] ${event.taskId} reason=${truncatePreview(
-        redactSensitiveText(event.reason),
-      )} plan=${truncatePreview(plan.join(" | "))}`;
+      const revisionPreview = truncatePreview(
+        `reason=${redactSensitiveText(event.reason)} plan=${plan.join(" | ")}`,
+      );
+      return `[plan_revised] ${event.taskId} ${revisionPreview}`;
     }
     case "assistant_text":
       return `[assistant_text] ${previewSensitiveText(event.text)}`;

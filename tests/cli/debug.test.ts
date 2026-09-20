@@ -283,3 +283,15 @@ void test("bounds the complete task-contract debug payload", () => {
 
   assert.ok(Buffer.byteLength(taskLine.slice(prefix.length), "utf8") <= previewMaximumBytes);
 });
+
+void test("bounds the complete plan-revision debug payload", () => {
+  const planLine = formatDebugEvent({
+    type: "plan_revised",
+    taskId: "task-large-revision",
+    reason: "é".repeat(300),
+    plan: Array.from({ length: 8 }, () => "é".repeat(300)),
+  });
+  const prefix = "[plan_revised] task-large-revision ";
+
+  assert.ok(Buffer.byteLength(planLine.slice(prefix.length), "utf8") <= previewMaximumBytes);
+});
