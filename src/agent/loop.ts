@@ -5,12 +5,15 @@ import type { AgentEvent } from "./events.js";
 import { EpisodicMemory } from "./episodic-memory.js";
 import {
   createTaskContract,
+  parsePlanRevision,
   parseTaskContract,
+  planRevisionToolDefinition,
+  planRevisionToolName,
   taskContractToolDefinition,
   taskContractToolName,
   type TaskContract,
 } from "./task-contract.js";
-import { ToolExecutor } from "../workspace/tools.js";
+import { isReadOnlyWorkspaceTool, ToolExecutor } from "../workspace/tools.js";
 import type { ChatMessage, ChatProvider, ToolCall } from "../shared/types.js";
 
 export class AgentLoop {
@@ -24,7 +27,7 @@ export class AgentLoop {
     {
       role: "system",
       content:
-        "You are CodeSmith, a local coding assistant. Work only through the supplied tools and stay focused on the selected project. Retain and use the conversation context. First call declare_task exactly once for each user submission. Preserve the user's goal in meaning and state 1 to 8 observable completion criteria; do not weaken requirements or guess missing decisions. Do not call workspace tools until task declaration succeeds. After declaration, the task contract is immutable for that submission and you must not call declare_task again. A brief reply such as 'yes', 'no', 'proceed', or 'do it' answers your immediately preceding unresolved question: act on that answer without asking the user to repeat context. When the user explicitly asks you to create, modify, rename, or remove code and the required details are available, call the appropriate tool immediately; do not ask for confirmation in your response because edits and commands have an approval gate in the tool. Never claim a file action succeeded unless its tool returned success. Inspect files before changing existing code. Never request, display, or infer environment secrets.",
+        "You are CodeSmith, a local coding assistant. Work only through the supplied tools and stay focused on the selected project. Retain and use the conversation context. First call declare_task exactly once for each user submission. Preserve the user's goal in meaning, state 1 to 8 observable completion criteria, and provide 1 to 8 concise ordered plan steps; do not weaken requirements or guess missing decisions. Do not call workspace tools until task declaration succeeds. After declaration, the goal and completion criteria are immutable for that submission. Use revise_plan only when evidence changes the approach; replace the complete plan and state a concise reason. Do not mix task or plan protocol calls with workspace calls. You may batch read-only workspace calls, but propose no more than one side-effecting workspace call in one response. Take the smallest useful next action. A brief reply such as 'yes', 'no', 'proceed', or 'do it' answers your immediately preceding unresolved question: act on that answer without asking the user to repeat context. When the user explicitly asks you to create, modify, rename, or remove code and the required details are available, call the appropriate tool immediately; do not ask for confirmation in your response because edits and commands have an approval gate in the tool. Never claim a file action succeeded unless its tool returned success. Inspect files before changing existing code. Never request, display, or infer environment secrets.",
     },
   ];
 
@@ -63,7 +66,7 @@ export class AgentLoop {
     this.trimHistory();
     const priorAssistantText = this.priorAssistantText();
     this.messages.push({ role: "user", content: prompt });
-    await this.declareTask();
+    const contract = await this.declareTask();
 
     const memoryContext = this.memory
       ? await this.memory.retrieve(
@@ -79,6 +82,7 @@ export class AgentLoop {
 
     let toolCallsUsed = 0;
     let toolRounds = 0;
+    let activePlan: readonly string[] | undefined;
 
     while (true) {
       this.assertOpen();
@@ -86,7 +90,11 @@ export class AgentLoop {
       this.assertOpen();
 
       const providerMessages = this.messagesForProvider(memoryContext, toolRounds === 0);
-      const tools = [taskContractToolDefinition, ...this.tools.definitions];
+      const tools = [
+        taskContractToolDefinition,
+        planRevisionToolDefinition,
+        ...this.tools.definitions,
+      ];
       this.emit(providerRequestEvent(toolRounds, providerMessages, tools.length));
       this.assertOpen();
 
@@ -131,16 +139,22 @@ export class AgentLoop {
       const hasTaskDeclaration = toolCalls.some(
         (call) => call.function.name === taskContractToolName,
       );
-      const hasWorkspaceCall = toolCalls.some(
-        (call) => call.function.name !== taskContractToolName,
+      const planRevisionCalls = toolCalls.filter(
+        (call) => call.function.name === planRevisionToolName,
       );
-      if (hasTaskDeclaration && hasWorkspaceCall) {
+      const workspaceCalls = toolCalls.filter(
+        (call) =>
+          call.function.name !== taskContractToolName &&
+          call.function.name !== planRevisionToolName,
+      );
+      if ((hasTaskDeclaration || planRevisionCalls.length > 0) && workspaceCalls.length > 0) {
         for (const call of toolCalls) {
           this.messages.push({
             role: "tool",
             content: JSON.stringify({
-              error:
-                "A response cannot mix declare_task with workspace tools. Retry without workspace calls.",
+              error: hasTaskDeclaration
+                ? "A response cannot mix declare_task with workspace tools. Retry without workspace calls."
+                : "A response cannot mix revise_plan with workspace tools. Retry with the plan revision alone.",
             }),
             tool_call_id: call.id,
           });
@@ -148,19 +162,85 @@ export class AgentLoop {
         continue;
       }
 
-      for (const call of toolCalls) {
-        this.assertOpen();
-        if (call.function.name === taskContractToolName) {
+      if (hasTaskDeclaration) {
+        const error =
+          planRevisionCalls.length > 0
+            ? "A response cannot call declare_task and revise_plan together."
+            : "The task contract is immutable for this submission. Do not call declare_task again.";
+        for (const call of toolCalls) {
           this.messages.push({
             role: "tool",
-            content: JSON.stringify({
-              error:
-                "The task contract is immutable for this submission. Do not call declare_task again.",
-            }),
+            content: JSON.stringify({ error }),
             tool_call_id: call.id,
+          });
+        }
+        continue;
+      }
+
+      if (planRevisionCalls.length > 0) {
+        const error =
+          planRevisionCalls.length !== 1 || toolCalls.length !== 1
+            ? "A plan revision must be the only tool call in a response."
+            : undefined;
+        if (error) {
+          for (const call of toolCalls) {
+            this.messages.push({
+              role: "tool",
+              content: JSON.stringify({ error }),
+              tool_call_id: call.id,
+            });
+          }
+          continue;
+        }
+
+        const revisionCall = planRevisionCalls[0];
+        if (!revisionCall) continue;
+        const parsed = parsePlanRevision(revisionCall.function.arguments);
+        if (!parsed.valid) {
+          this.messages.push({
+            role: "tool",
+            content: JSON.stringify({ error: parsed.message }),
+            tool_call_id: revisionCall.id,
           });
           continue;
         }
+
+        activePlan = Object.freeze([...parsed.input.plan]);
+        this.messages.push({
+          role: "tool",
+          content: JSON.stringify({
+            status: "plan_revised",
+            plan: activePlan,
+            reason: parsed.input.reason,
+          }),
+          tool_call_id: revisionCall.id,
+        });
+        this.emit({
+          type: "plan_revised",
+          taskId: contract.taskId,
+          plan: activePlan,
+          reason: parsed.input.reason,
+        });
+        continue;
+      }
+
+      const sideEffectingCalls = workspaceCalls.filter(
+        (call) => !isReadOnlyWorkspaceTool(call.function.name),
+      );
+      if (sideEffectingCalls.length > 1) {
+        const error =
+          "A response cannot contain more than one side-effecting workspace call. Retry with the smallest useful next action.";
+        for (const call of toolCalls) {
+          this.messages.push({
+            role: "tool",
+            content: JSON.stringify({ error }),
+            tool_call_id: call.id,
+          });
+        }
+        continue;
+      }
+
+      for (const call of workspaceCalls) {
         this.emit({ type: "tool_proposed", call });
         this.assertOpen();
         this.emit({ type: "tool_started", call });
@@ -216,7 +296,11 @@ export class AgentLoop {
           const contract = createTaskContract(parsed.input);
           this.messages.push({
             role: "tool",
-            content: JSON.stringify({ status: "declared", taskId: contract.taskId }),
+            content: JSON.stringify({
+              status: "declared",
+              taskId: contract.taskId,
+              plan: contract.plan,
+            }),
             tool_call_id: declarationCall.id,
           });
           this.emit({ type: "task_declared", contract });
@@ -255,7 +339,7 @@ export class AgentLoop {
         const retryFeedback: ChatMessage = {
           role: "user",
           content:
-            "Task declaration is required before any answer or workspace action. Call declare_task exactly once with a goal and 1 to 8 observable completion criteria.",
+            "Task declaration is required before any answer or workspace action. Call declare_task exactly once with a goal, 1 to 8 observable completion criteria, and 1 to 8 ordered plan steps.",
         };
         this.retryFeedbackMessages.add(retryFeedback);
         this.messages.push(retryFeedback);

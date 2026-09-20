@@ -48,6 +48,18 @@ export interface ApprovalRequest {
 }
 export type Approval = (request: ApprovalRequest) => Promise<boolean>;
 
+const readOnlyToolNames = new Set([
+  "list_files",
+  "search_files",
+  "read_file",
+  "git_status",
+  "git_diff",
+]);
+
+export function isReadOnlyWorkspaceTool(toolName: string): boolean {
+  return readOnlyToolNames.has(toolName);
+}
+
 export class ToolExecutor {
   private constructor(
     private readonly sandbox: ProjectSandbox,

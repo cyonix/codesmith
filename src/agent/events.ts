@@ -5,6 +5,12 @@ import type { TaskContract } from "./task-contract.js";
 export type AgentEvent =
   | { type: "status"; phase: "thinking" | "waiting_for_approval" | "complete" }
   | { type: "task_declared"; contract: TaskContract }
+  | {
+      type: "plan_revised";
+      taskId: string;
+      plan: readonly string[];
+      reason: string;
+    }
   | { type: "assistant_text"; text: string }
   | { type: "tool_proposed"; call: ToolCall }
   | { type: "tool_started"; call: ToolCall }

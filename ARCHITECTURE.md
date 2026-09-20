@@ -103,7 +103,7 @@ sequenceDiagram
   end
   Session->>Agent: run(prompt)
   Agent->>Provider: declare_task only
-  Provider-->>Agent: bounded task contract
+  Provider-->>Agent: bounded task contract and ordered plan
   Agent-->>Client: task_declared event
   Agent->>Memory: retrieve relevant episodes
   Memory-->>Agent: bounded untrusted evidence
@@ -111,8 +111,12 @@ sequenceDiagram
   Provider->>Model: request completion
   Model-->>Provider: text or tool calls
   Provider-->>Agent: response
+  opt Model revises the plan
+    Agent->>Client: plan_revised event
+    Agent-->>Provider: revised plan result
+  end
   opt Model requests tools
-    Agent->>Tools: run approved tool
+    Agent->>Tools: run read-only batch or one approved side effect
     Tools-->>Agent: structured result
     Agent->>Memory: record redacted result
   end
@@ -201,7 +205,8 @@ Google's retention terms before you choose a Gemini model.
 | Event                | Meaning                                                        |
 | -------------------- | -------------------------------------------------------------- |
 | `status`             | The agent is `thinking`, `waiting_for_approval`, or `complete` |
-| `task_declared`      | A bounded goal and completion criteria were accepted           |
+| `task_declared`      | A bounded goal, criteria, and ordered plan were accepted       |
+| `plan_revised`       | The complete plan was replaced with a stated reason            |
 | `assistant_text`     | The final text response from the agent                         |
 | `tool_proposed`      | The model asked to call a tool                                 |
 | `tool_started`       | A local tool is about to run                                   |
@@ -226,16 +231,20 @@ messages, timelines, diff previews, and approval dialogs.
 ## 4. Request lifecycle
 
 1. A client sends a prompt to an `AgentSession`.
-2. The core asks the provider to call `declare_task` with one goal and 1 to 8
-   observable completion criteria. The declaration is structurally validated,
-   bounded, immutable for the submission, and retried at most once.
+2. The core asks the provider to call `declare_task` with one goal, 1 to 8
+   observable completion criteria, and 1 to 8 ordered plan steps. The
+   declaration is structurally validated, bounded, immutable for the
+   submission, and retried at most once.
 3. After a valid declaration, the core emits `task_declared` and retrieves
    bounded episodic evidence, if enabled.
 4. The core sends the prompt, declaration result, evidence guard, and
    workspace tool definitions to the provider.
-5. The model returns text or tool calls.
-6. The sandboxed executor runs approved tool calls on the local machine.
-7. The tool results return to the model until it gives a final response.
+5. The model returns text or tool calls. It can use `revise_plan` as a
+   model-only call when evidence changes the approach.
+6. The loop can run a batch of read-only file or Git inspection calls, but it
+   rejects more than one side-effecting workspace call in one response.
+7. The sandboxed executor runs approved tool calls on the local machine.
+8. The tool results return to the model until it gives a final response.
 
 CodeSmith keeps conversation context for the current session. It interprets
 brief replies such as `yes`, `no`, `proceed`, and `do it` using the agent's most
@@ -252,11 +261,15 @@ episodic-memory evidence are available. A contract contains:
 - A non-empty goal of at most 500 Unicode code points.
 - One to eight unique completion criteria.
 - Criteria of at most 300 Unicode code points each.
+- One to eight unique ordered plan steps.
+- Plan steps and revision reasons of at most 300 Unicode code points each.
 
-The contract receives an immutable task ID and remains fixed for the
-submission. Clients receive it through `task_declared`; the CLI presents the
-goal and numbered criteria without treating the declaration as an approval
-boundary. Debug logs include the task ID, goal, and criteria through the shared
+The contract receives an immutable task ID. Its goal and completion criteria
+remain fixed for the submission, while `revise_plan` can replace the complete
+plan with a bounded reason. Clients receive the initial contract through
+`task_declared` and revisions through `plan_revised`; the CLI presents both
+without treating planning as an approval boundary. Debug logs include the task
+ID, goal, criteria, plan, and revision reason through the shared
 credential-redaction and bounded-preview path.
 
 ### Episodic memory
@@ -297,8 +310,15 @@ CodeSmith follows these principles when it runs an agent loop.
 
 - [x] **Clear goals and completion criteria:** State the goal and how to tell
       when the work is complete before acting.
-- [ ] **Plan before side effects:** Make a clear plan that can change, then
-      take the smallest useful next action.
+- [x] **Plan before side effects:** Make a clear plan that can change, then
+      take the smallest useful next action. Each submission declares a bounded
+      ordered plan with its goal and completion criteria before workspace work.
+      The model can replace the full plan with a concise reason when evidence
+      changes the approach. Read-only discovery can run in a batch, but each
+      response can contain no more than one side-effecting workspace call;
+      read-only file and Git inspection can still run in a batch.
+      Planning never replaces the existing approval required for edits, Git
+      inspection, commands, or model downloads.
 - [ ] **Grounded context:** Use only the workspace, conversation, and tool
       context needed for the current decision. State uncertainty instead of
       guessing.

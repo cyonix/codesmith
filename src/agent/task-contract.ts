@@ -2,27 +2,42 @@ import { randomUUID } from "node:crypto";
 import type { JsonValue, ToolDefinition } from "../shared/types.js";
 
 export const taskContractToolName = "declare_task";
+export const planRevisionToolName = "revise_plan";
+
+const maximumPlanSteps = 8;
+const maximumPlanStepLength = 300;
+const maximumPlanRevisionReasonLength = 300;
 
 export interface TaskContract {
   readonly taskId: string;
   readonly goal: string;
   readonly completionCriteria: readonly string[];
+  readonly plan: readonly string[];
 }
 
 export interface TaskContractInput {
   goal: string;
   completionCriteria: string[];
+  plan: string[];
 }
 
 export type TaskContractParseResult =
   { valid: true; input: TaskContractInput } | { valid: false; message: string };
+
+export interface PlanRevisionInput {
+  plan: string[];
+  reason: string;
+}
+
+export type PlanRevisionParseResult =
+  { valid: true; input: PlanRevisionInput } | { valid: false; message: string };
 
 export const taskContractToolDefinition: ToolDefinition = {
   type: "function",
   function: {
     name: taskContractToolName,
     description:
-      "Declare the goal and observable completion criteria for this submission before using any workspace tool.",
+      "Declare the goal, observable completion criteria, and ordered execution plan for this submission before using any workspace tool.",
     parameters: {
       type: "object",
       properties: {
@@ -40,8 +55,46 @@ export const taskContractToolDefinition: ToolDefinition = {
           maxItems: 8,
           uniqueItems: true,
         },
+        plan: {
+          type: "array",
+          description: "One to eight concise, ordered steps for completing the goal.",
+          items: { type: "string", minLength: 1, maxLength: maximumPlanStepLength },
+          minItems: 1,
+          maxItems: maximumPlanSteps,
+          uniqueItems: true,
+        },
       },
-      required: ["goal", "completionCriteria"],
+      required: ["goal", "completionCriteria", "plan"],
+      additionalProperties: false,
+    },
+  },
+};
+
+export const planRevisionToolDefinition: ToolDefinition = {
+  type: "function",
+  function: {
+    name: planRevisionToolName,
+    description:
+      "Replace the complete ordered plan when new evidence changes the approach. Include a concise reason. Do not use this call with workspace tools.",
+    parameters: {
+      type: "object",
+      properties: {
+        plan: {
+          type: "array",
+          description: "The complete replacement plan, with one to eight ordered steps.",
+          items: { type: "string", minLength: 1, maxLength: maximumPlanStepLength },
+          minItems: 1,
+          maxItems: maximumPlanSteps,
+          uniqueItems: true,
+        },
+        reason: {
+          type: "string",
+          description: "A concise explanation of why the plan changed.",
+          minLength: 1,
+          maxLength: maximumPlanRevisionReasonLength,
+        },
+      },
+      required: ["plan", "reason"],
       additionalProperties: false,
     },
   },
@@ -64,10 +117,15 @@ export function parseTaskContract(argumentsValue: string): TaskContractParseResu
   }
 
   const keys = Object.keys(parsed).sort();
-  if (keys.length !== 2 || keys[0] !== "completionCriteria" || keys[1] !== "goal") {
+  if (
+    keys.length !== 3 ||
+    keys[0] !== "completionCriteria" ||
+    keys[1] !== "goal" ||
+    keys[2] !== "plan"
+  ) {
     return {
       valid: false,
-      message: 'Task declaration accepts only "goal" and "completionCriteria".',
+      message: 'Task declaration accepts only "goal", "completionCriteria", and "plan".',
     };
   }
 
@@ -84,7 +142,7 @@ export function parseTaskContract(argumentsValue: string): TaskContractParseResu
   if (!Array.isArray(parsed.completionCriteria)) {
     return { valid: false, message: "Task declaration criteria must be an array." };
   }
-  if (parsed.completionCriteria.length < 1 || parsed.completionCriteria.length > 8) {
+  if (parsed.completionCriteria.length < 1 || parsed.completionCriteria.length > maximumPlanSteps) {
     return { valid: false, message: "Task declaration must contain 1 to 8 criteria." };
   }
 
@@ -111,7 +169,49 @@ export function parseTaskContract(argumentsValue: string): TaskContractParseResu
     completionCriteria.push(trimmed);
   }
 
-  return { valid: true, input: { goal, completionCriteria } };
+  const plan = parsePlanSteps(parsed.plan, "Task declaration");
+  if (!plan.valid) return plan;
+
+  return { valid: true, input: { goal, completionCriteria, plan: plan.steps } };
+}
+
+export function parsePlanRevision(argumentsValue: string): PlanRevisionParseResult {
+  if (hasDuplicateObjectKeys(argumentsValue)) {
+    return { valid: false, message: "Plan revision arguments must not contain duplicate keys." };
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(argumentsValue) as unknown;
+  } catch {
+    return { valid: false, message: "Plan revision arguments must be valid JSON." };
+  }
+
+  if (!isRecord(parsed) || Array.isArray(parsed)) {
+    return { valid: false, message: "Plan revision arguments must be a JSON object." };
+  }
+
+  const keys = Object.keys(parsed).sort();
+  if (keys.length !== 2 || keys[0] !== "plan" || keys[1] !== "reason") {
+    return { valid: false, message: 'Plan revision accepts only "plan" and "reason".' };
+  }
+
+  if (typeof parsed.reason !== "string") {
+    return { valid: false, message: "Plan revision reason must be a string." };
+  }
+  const reason = parsed.reason.trim();
+  if (!reason) return { valid: false, message: "Plan revision reason must not be empty." };
+  if ([...reason].length > maximumPlanRevisionReasonLength) {
+    return {
+      valid: false,
+      message: `Plan revision reason must be at most ${maximumPlanRevisionReasonLength} characters.`,
+    };
+  }
+
+  const plan = parsePlanSteps(parsed.plan, "Plan revision");
+  if (!plan.valid) return plan;
+
+  return { valid: true, input: { plan: plan.steps, reason } };
 }
 
 export function createTaskContract(input: TaskContractInput): TaskContract {
@@ -119,7 +219,44 @@ export function createTaskContract(input: TaskContractInput): TaskContract {
     taskId: randomUUID(),
     goal: input.goal,
     completionCriteria: Object.freeze([...input.completionCriteria]),
+    plan: Object.freeze([...input.plan]),
   });
+}
+
+function parsePlanSteps(
+  value: JsonValue | undefined,
+  label: "Task declaration" | "Plan revision",
+): { valid: true; steps: string[] } | { valid: false; message: string } {
+  if (!Array.isArray(value)) return { valid: false, message: `${label} plan must be an array.` };
+  if (value.length < 1 || value.length > maximumPlanSteps) {
+    return {
+      valid: false,
+      message: `${label} plan must contain 1 to ${maximumPlanSteps} steps.`,
+    };
+  }
+
+  const steps: string[] = [];
+  const seen = new Set<string>();
+  for (const step of value) {
+    if (typeof step !== "string") {
+      return { valid: false, message: `Each ${label.toLowerCase()} plan step must be a string.` };
+    }
+    const trimmed = step.trim();
+    if (!trimmed) return { valid: false, message: `${label} plan steps must not be empty.` };
+    if ([...trimmed].length > maximumPlanStepLength) {
+      return {
+        valid: false,
+        message: `Each ${label.toLowerCase()} plan step must be at most ${maximumPlanStepLength} characters.`,
+      };
+    }
+    if (seen.has(trimmed)) {
+      return { valid: false, message: `${label} plan steps must be unique.` };
+    }
+    seen.add(trimmed);
+    steps.push(trimmed);
+  }
+
+  return { valid: true, steps };
 }
 
 function isRecord(value: unknown): value is Record<string, JsonValue> {

@@ -13,8 +13,17 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { ToolExecutor } from "../../src/workspace/tools.js";
+import { isReadOnlyWorkspaceTool, ToolExecutor } from "../../src/workspace/tools.js";
 import type { ToolCall } from "../../src/shared/types.js";
+
+void test("classifies file and Git inspection as read-only workspace tools", () => {
+  for (const toolName of ["list_files", "search_files", "read_file", "git_status", "git_diff"]) {
+    assert.equal(isReadOnlyWorkspaceTool(toolName), true);
+  }
+  for (const toolName of ["create_file", "delete_file", "apply_patch", "run_command"]) {
+    assert.equal(isReadOnlyWorkspaceTool(toolName), false);
+  }
+});
 
 void test("does not patch a file when approval is denied", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
