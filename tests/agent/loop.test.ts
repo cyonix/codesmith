@@ -45,6 +45,23 @@ void test("tool loop reads a file using a mocked provider", async (context) => {
       ),
   );
 });
+void test("does not return an assistant completion twice", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const duplicated =
+    "I inspected main.js and started the change.\n\nI inspected main.js and started the change.";
+  const provider = new MockProvider([{ content: duplicated, toolCalls: [] }]);
+  const events: AgentEvent[] = [];
+  const result = await new AgentLoop(provider, await ToolExecutor.create(root, true), 12, (event) =>
+    events.push(event),
+  ).run("Inspect main.js.");
+
+  assert.equal(result, "I inspected main.js and started the change.");
+  assert.deepEqual(
+    events.filter((event) => event.type === "assistant_text"),
+    [{ type: "assistant_text", text: "I inspected main.js and started the change." }],
+  );
+});
 void test("requires and emits a bounded task contract before workspace work", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
   context.after(async () => rm(root, { recursive: true, force: true }));
