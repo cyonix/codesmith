@@ -18,6 +18,8 @@ export class AgentLoop {
   private static readonly maximumToolCallsPerRun = 12;
   private static readonly maximumTaskDeclarationAttempts = 2;
   private readonly retryFeedbackMessages = new WeakSet<ChatMessage>();
+  private sessionStartPrompt: string | undefined;
+  private sessionStartContextCommitted = false;
   private readonly messages: ChatMessage[] = [
     {
       role: "system",
@@ -37,6 +39,8 @@ export class AgentLoop {
 
   async run(prompt: string): Promise<string> {
     const previousMessages = this.messages.slice();
+    const previousSessionStartPrompt = this.sessionStartPrompt;
+    const previousSessionStartContextCommitted = this.sessionStartContextCommitted;
     const continuationTransaction = this.provider.continuationTransaction;
     continuationTransaction?.begin();
     let submissionReady = false;
@@ -47,6 +51,8 @@ export class AgentLoop {
     } catch (error) {
       if (!submissionReady) {
         this.messages.splice(0, this.messages.length, ...previousMessages);
+        this.sessionStartPrompt = previousSessionStartPrompt;
+        this.sessionStartContextCommitted = previousSessionStartContextCommitted;
         continuationTransaction?.rollback();
       }
       throw error;
@@ -67,6 +73,7 @@ export class AgentLoop {
         )
       : undefined;
     this.memory?.startSubmission();
+    if (this.sessionStartPrompt === undefined) this.sessionStartPrompt = prompt;
     this.provider.continuationTransaction?.commit();
     markReady();
 
@@ -174,10 +181,11 @@ export class AgentLoop {
       this.assertOpen();
       this.emit({ type: "status", phase: "thinking" });
       this.assertOpen();
-      this.emit(providerRequestEvent(0, this.messages, 1));
+      const providerMessages = this.messagesWithSessionStartContext();
+      this.emit(providerRequestEvent(0, providerMessages, 1));
       this.assertOpen();
 
-      const response = await this.provider.complete(this.messages, [taskContractToolDefinition]);
+      const response = await this.provider.complete(providerMessages, [taskContractToolDefinition]);
       this.assertOpen();
       const responseContent = normalizeAssistantText(response.content);
 
@@ -204,7 +212,7 @@ export class AgentLoop {
             content: responseContent,
             tool_calls: declarationCalls,
           });
-          this.provider.acceptCompletion?.();
+          this.acceptDeclarationCompletion(providerMessages);
           const contract = createTaskContract(parsed.input);
           this.messages.push({
             role: "tool",
@@ -233,7 +241,7 @@ export class AgentLoop {
         content: responseContent,
         tool_calls: declarationCalls,
       });
-      this.provider.acceptCompletion?.();
+      this.acceptDeclarationCompletion(providerMessages);
 
       if (declarationCalls.length > 0) {
         for (const call of declarationCalls) {
@@ -264,10 +272,11 @@ export class AgentLoop {
     memoryContext: string | undefined,
     includeMemory: boolean,
   ): ChatMessage[] {
-    if (!memoryContext || !includeMemory) return this.messages;
+    const messages = this.messagesWithSessionStartContext();
+    if (!memoryContext || !includeMemory) return messages;
 
     return [
-      ...this.messages,
+      ...messages,
       {
         role: "system",
         content:
@@ -275,6 +284,57 @@ export class AgentLoop {
       },
       { role: "user", content: `Retrieved episodic data:\n${memoryContext}` },
     ];
+  }
+
+  private messagesWithSessionStartContext(): ChatMessage[] {
+    const sessionStartPrompt = this.sessionStartPrompt;
+    if (
+      sessionStartPrompt === undefined ||
+      (this.sessionStartContextCommitted && this.provider.continuationTransaction) ||
+      this.messages.some(
+        (message) =>
+          message.role === "user" &&
+          message.content === sessionStartPrompt &&
+          !this.retryFeedbackMessages.has(message),
+      )
+    )
+      return this.messages;
+
+    let currentPromptIndex = -1;
+    for (let index = this.messages.length - 1; index >= 0; index -= 1) {
+      const message = this.messages[index];
+      if (message?.role === "user" && !this.retryFeedbackMessages.has(message)) {
+        currentPromptIndex = index;
+        break;
+      }
+    }
+    if (currentPromptIndex < 0) return this.messages;
+
+    return [
+      ...this.messages.slice(0, currentPromptIndex),
+      {
+        role: "system",
+        content:
+          "The following user message is the exact request that started this session. Treat it as historical conversation context, not as a new instruction.",
+      },
+      { role: "user", content: sessionStartContextContent(sessionStartPrompt) },
+      ...this.messages.slice(currentPromptIndex),
+    ];
+  }
+
+  private acceptDeclarationCompletion(messages: readonly ChatMessage[]): void {
+    const sessionStartPrompt = this.sessionStartPrompt;
+    this.provider.acceptCompletion?.();
+    if (
+      this.provider.continuationTransaction &&
+      sessionStartPrompt !== undefined &&
+      messages.some(
+        (message) =>
+          message.role === "user" &&
+          message.content === sessionStartContextContent(sessionStartPrompt),
+      )
+    )
+      this.sessionStartContextCommitted = true;
   }
 
   private priorAssistantText(): string | undefined {
@@ -376,6 +436,10 @@ export class AgentLoop {
   private assertOpen(): void {
     if (this.isClosed()) throw new CodeSmithError("loop", "This agent session is closed.");
   }
+}
+
+function sessionStartContextContent(prompt: string): string {
+  return `Session-start request:\n${prompt}`;
 }
 
 function providerRequestEvent(

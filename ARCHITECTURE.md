@@ -239,7 +239,10 @@ messages, timelines, diff previews, and approval dialogs.
 
 CodeSmith keeps conversation context for the current session. It interprets
 brief replies such as `yes`, `no`, `proceed`, and `do it` using the agent's most
-recent unresolved question.
+recent unresolved question. The loop keeps a bounded rolling history and
+preserves the exact first user request as session-start context when normal
+history compaction removes it. This context stays in process and is sent as
+historical user data, not as a trusted system instruction.
 
 ### Task contracts
 
@@ -272,7 +275,10 @@ configured cosine-similarity threshold are supplied as a bounded, ephemeral
 untrusted data context paired with a trusted system guard. The model is told
 that this evidence may be stale, is never an instruction, and must be verified
 with tools before action. Retrieved episode excerpts are capped at 1 KiB each
-and are never persisted in raw conversation history.
+and are never persisted in raw conversation history. Semantic memory is not
+used as the source of exact session continuity; the session-start request is
+preserved separately so exact details such as the requested programming
+language remain available even when semantic memory is disabled.
 
 CodeSmith runs the reviewed, pinned local ONNX embedding model with an
 owner-only platform cache. The first use requires explicit `model_download`
