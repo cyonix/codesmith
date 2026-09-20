@@ -280,6 +280,13 @@ export class ToolExecutor {
     if (!initialContent || occurrences(initialContent, expected) !== 1)
       throw new SwiftCoderAIError("arguments", "expected_content must occur exactly once.");
 
+    const prospectiveOutputBytes =
+      Buffer.byteLength(initialContent, "utf8") -
+      Buffer.byteLength(expected, "utf8") +
+      Buffer.byteLength(replacement, "utf8");
+    if (prospectiveOutputBytes > MAXIMUM_TEXT_BYTES)
+      throw new SwiftCoderAIError("arguments", "Patched file would exceed 10 MB.");
+
     const summary = `Apply patch to ${safePreview(this.sandbox.relative(filePath))}:\n- ${safePreview(expected)}\n+ ${safePreview(replacement)}`;
     if (!(await this.isApproved({ kind: "edit", summary })))
       return JSON.stringify({ status: "declined" });
@@ -549,7 +556,7 @@ async function assertPatchableText(filePath: string): Promise<void> {
   const fileStat = await stat(filePath);
 
   if (!fileStat.isFile() || fileStat.size > MAXIMUM_TEXT_BYTES)
-    throw new SwiftCoderAIError("sandbox", "Patches require an existing UTF-8 file up to 1 MB.");
+    throw new SwiftCoderAIError("sandbox", "Patches require an existing UTF-8 file up to 10 MB.");
   if (fileStat.nlink !== 1)
     throw new SwiftCoderAIError("sandbox", "Patches cannot modify files with multiple hard links.");
 }
@@ -577,7 +584,7 @@ async function replaceVerifiedText(
     await validateOpenedTarget(fileHandle, fileStat, sandbox.root, filePath);
 
     if (!fileStat.isFile() || fileStat.size > MAXIMUM_TEXT_BYTES)
-      throw new SwiftCoderAIError("sandbox", "Patches require an existing UTF-8 file up to 1 MB.");
+      throw new SwiftCoderAIError("sandbox", "Patches require an existing UTF-8 file up to 10 MB.");
     if (fileStat.nlink !== 1)
       throw new SwiftCoderAIError(
         "sandbox",
@@ -590,7 +597,7 @@ async function replaceVerifiedText(
 
     const output = content.replace(expected, replacement);
     if (Buffer.byteLength(output, "utf8") > MAXIMUM_TEXT_BYTES)
-      throw new SwiftCoderAIError("sandbox", "Patched file would exceed 1 MB.");
+      throw new SwiftCoderAIError("sandbox", "Patched file would exceed 10 MB.");
 
     await fileHandle.truncate(0);
 
