@@ -26,6 +26,13 @@ can show it in their own interface. The model can replace the full plan through
 the `plan_revised` event when new evidence changes the approach. The CLI
 displays the contract and plan without treating them as approval prompts.
 
+Execution uses only the current submission, its task contract, plan revisions,
+and fresh tool results. Read-only evidence is bounded: `read_file` returns up to
+200 lines and 20 KiB at a time and supports `start_line` for the next page;
+`list_files` and `search_files` report pagination or truncation when their
+results are capped. The model must state uncertainty and ask for missing input
+when evidence is incomplete or conflicts instead of guessing.
+
 ## Capabilities
 
 - Use projects in Swift, JavaScript, TypeScript, Python, Rust, and Go.

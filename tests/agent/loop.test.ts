@@ -150,6 +150,45 @@ void test("revises the plan with evidence before the next workspace action", asy
     ],
   );
 });
+void test("keeps invalid plan revisions paired with their tool results", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const provider = new MockProvider(
+    [
+      {
+        toolCalls: [
+          {
+            id: "invalid-revision",
+            function: {
+              name: "revise_plan",
+              arguments: JSON.stringify({ plan: [], reason: "The plan changed." }),
+            },
+          },
+        ],
+      },
+      { toolCalls: [{ id: "list-1", function: { name: "list_files", arguments: "{}" } }] },
+      { content: "Completed.", toolCalls: [] },
+    ],
+    true,
+  );
+
+  assert.equal(
+    await new AgentLoop(provider, await ToolExecutor.create(root, true)).run(
+      "Inspect the project.",
+    ),
+    "Completed.",
+  );
+  const retryRequest = provider.messages[2];
+  assert.ok(retryRequest);
+  assert.ok(
+    retryRequest.some(
+      (message) =>
+        message.role === "tool" &&
+        message.tool_call_id === "invalid-revision" &&
+        message.content?.includes("plan must contain"),
+    ),
+  );
+});
 void test("allows batched reads but rejects multiple side-effecting calls", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
   context.after(async () => rm(root, { recursive: true, force: true }));
@@ -490,7 +529,7 @@ void test("tool loop retains prior prompts and creates the first project file", 
     ),
   );
 });
-void test("tool loop retains the session-start prompt after history compaction", async (context) => {
+void test("declaration context retains the session-start prompt after history compaction", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
   context.after(async () => rm(root, { recursive: true, force: true }));
   const initialPrompt = "write me some surprise code in go";
@@ -509,20 +548,32 @@ void test("tool loop retains the session-start prompt after history compaction",
   for (let index = 0; index < 8; index += 1) await loop.run(`Follow-up turn ${index}.`);
   await loop.run(finalPrompt);
 
-  let finalRequest: ChatMessage[] | undefined;
-  for (let index = provider.messages.length - 1; index >= 0; index -= 1) {
-    const messages = provider.messages[index];
-    if (messages?.some((message) => message.role === "user" && message.content === finalPrompt)) {
-      finalRequest = messages;
-      break;
-    }
-  }
-  assert.ok(finalRequest);
-  assert.ok(
-    finalRequest.some(
+  const matchingRequests = provider.messages.filter((messages) =>
+    messages.some((message) => message.role === "user" && message.content === finalPrompt),
+  );
+  const finalDeclarationRequest = matchingRequests.find((messages) =>
+    messages.some(
       (message) =>
         message.role === "user" && message.content === `Session-start request:\n${initialPrompt}`,
     ),
+  );
+  const finalExecutionRequest = matchingRequests.find(
+    (messages) => messages !== finalDeclarationRequest,
+  );
+  assert.ok(finalDeclarationRequest);
+  assert.ok(finalExecutionRequest);
+  assert.ok(
+    finalDeclarationRequest.some(
+      (message) =>
+        message.role === "user" && message.content === `Session-start request:\n${initialPrompt}`,
+    ),
+  );
+  assert.equal(
+    finalExecutionRequest.some(
+      (message) =>
+        message.role === "user" && message.content === `Session-start request:\n${initialPrompt}`,
+    ),
+    false,
   );
 });
 void test("tool loop interprets yes as confirmation of the preceding file-removal question", async (context) => {
@@ -837,6 +888,13 @@ void test("emits redacted provider-request previews before each completion", asy
         (message) => message.role === "user" && message.preview.includes("HelloWorld.swift"),
       ),
     );
+    assert.ok(
+      request.messages.some(
+        (message) =>
+          message.role === "system" &&
+          message.preview.includes("current user request and fresh tool results"),
+      ),
+    );
   }
 });
 
@@ -906,11 +964,12 @@ void test("does not retain prior tool results after a completed turn", async (co
       toolPreviews.some((preview) => preview.includes("Public file")),
       false,
     );
-    assert.ok(
+    assert.equal(
       finalRequest.messages.some(
         (message) =>
           message.role === "assistant" && message.preview.includes("I read the public file."),
       ),
+      false,
     );
     assert.equal(JSON.stringify(finalRequest.messages).includes("opaque-value"), false);
   }

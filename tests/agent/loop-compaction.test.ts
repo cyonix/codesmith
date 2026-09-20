@@ -9,7 +9,7 @@ import type {
   ToolDefinition,
 } from "../../src/shared/types.js";
 
-void test("history compaction keeps the final answer after a tool-using turn", async () => {
+void test("declaration context keeps follow-ups grounded without replaying old execution turns", async () => {
   const provider = new CompactionProvider([
     { toolCalls: [{ id: "list-1", function: { name: "list_files", arguments: "{}" } }] },
     { content: "Would you like me to continue?", toolCalls: [] },
@@ -20,15 +20,30 @@ void test("history compaction keeps the final answer after a tool-using turn", a
   assert.equal(await loop.run("Inspect the project."), "Would you like me to continue?");
   assert.equal(await loop.run("yes"), "Continued.");
 
-  const followUpRequest = provider.messages.at(-1);
-  assert.ok(followUpRequest);
+  const followUpDeclaration = provider.messages.find((messages) =>
+    messages.some((message) => message.role === "user" && message.content === "yes"),
+  );
+  assert.ok(followUpDeclaration);
   assert.ok(
-    followUpRequest.some(
+    followUpDeclaration.some(
       (message) =>
         message.role === "assistant" &&
         message.content === "Would you like me to continue?" &&
         !message.tool_calls?.length,
     ),
+  );
+
+  const followUpRequest = provider.messages.at(-1);
+  assert.ok(followUpRequest);
+  assert.equal(
+    followUpRequest.some(
+      (message) =>
+        message.role === "assistant" && message.content === "Would you like me to continue?",
+    ),
+    false,
+  );
+  assert.ok(
+    followUpRequest.some((message) => message.role === "user" && message.content === "yes"),
   );
 });
 
