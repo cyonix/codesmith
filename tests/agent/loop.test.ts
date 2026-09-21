@@ -179,7 +179,7 @@ void test("sanitizes case and Unicode variants of excluded requests", async (con
             function: {
               name: "declare_task",
               arguments: JSON.stringify({
-                goal: "Explain tests and plan a cafe\u0301. Also explain ΟΣ.",
+                goal: "Explain tests and plan  a cafe\u0301. Also explain ΟΣ.",
                 completionCriteria: ["The explanation is complete."],
                 plan: ["Explain the test structure."],
                 excludedRequests: ["PLAN A CAFÉ.", "ος"],

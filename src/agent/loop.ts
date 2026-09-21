@@ -829,7 +829,7 @@ function excludedMatchEnd(
 }
 
 function normalizeExcludedText(value: string): string {
-  return value.normalize("NFKC").toLowerCase();
+  return value.normalize("NFKC").toLowerCase().replace(/\s+/gu, " ");
 }
 
 function sessionStartContextContent(prompt: string): string {
