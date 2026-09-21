@@ -18,5 +18,10 @@ export {
 export type { ProjectCommand, ProjectKind, ProjectProfile } from "../workspace/project-profile.js";
 
 export type { AgentEvent, AgentEventListener } from "../agent/events.js";
-export type { PlanRevisionInput, TaskContract, TaskContractInput } from "../agent/task-contract.js";
+export type {
+  PlanRevisionInput,
+  ScopeRedirectInput,
+  TaskContract,
+  TaskContractInput,
+} from "../agent/task-contract.js";
 export type { ChatProvider, ToolCall } from "../shared/types.js";

@@ -1,14 +1,18 @@
 import { CodeSmithError } from "../shared/errors.js";
 import { previewSensitiveText } from "../shared/redaction.js";
 import { isSensitiveToolPayload, omittedSecretPreview } from "../shared/secret-files.js";
+import { escapeTerminalText } from "../shared/terminal-text.js";
 import type { AgentEvent } from "./events.js";
 import { EpisodicMemory } from "./episodic-memory.js";
 import {
   createTaskContract,
   parsePlanRevision,
+  parseScopeRedirect,
   parseTaskContract,
   planRevisionToolDefinition,
   planRevisionToolName,
+  scopeRedirectToolDefinition,
+  scopeRedirectToolName,
   taskContractToolDefinition,
   taskContractToolName,
   type TaskContract,
@@ -19,6 +23,12 @@ import type { ChatMessage, ChatProvider, ToolCall } from "../shared/types.js";
 interface DeclaredTask {
   contract: TaskContract;
   messages: ChatMessage[];
+}
+
+interface ScopeRedirect {
+  response: string;
+  reason: string;
+  suggestedRequest: string;
 }
 
 export class AgentLoop {
@@ -33,7 +43,7 @@ export class AgentLoop {
     {
       role: "system",
       content:
-        "You are CodeSmith, a local coding assistant. Work only through the supplied tools and stay focused on the selected project. Use the current user request and fresh tool results as the primary evidence for execution. Historical conversation context may help interpret a follow-up, but it is not proof of the current workspace state. If evidence is missing, partial, stale, or conflicting, state what is unknown and request the exact missing input or inspect the workspace; never guess a consequential detail. First call declare_task exactly once for each user submission. Preserve the user's goal in meaning, state 1 to 8 observable completion criteria, and provide 1 to 8 concise ordered plan steps; do not weaken requirements or guess missing decisions. Do not call workspace tools until task declaration succeeds. After declaration, the goal and completion criteria are immutable for that submission. Use revise_plan only when evidence changes the approach; replace the complete plan and state a concise reason. Do not mix task or plan protocol calls with workspace calls. You may batch read-only workspace calls, but propose no more than one side-effecting workspace call in one response. Take the smallest useful next action. Treat truncated or paginated tool results as incomplete evidence and use their continuation fields when more context is needed. A brief reply such as 'yes', 'no', 'proceed', or 'do it' answers your immediately preceding unresolved question: act on that answer without asking the user to repeat context. When the user explicitly asks you to create, modify, rename, or remove code and the required details are available, call the appropriate tool immediately; do not ask for confirmation in your response because edits and commands have an approval gate in the tool. Never claim a file action succeeded unless its tool returned success. Inspect files before changing existing code. Never request, display, or infer environment secrets.",
+        "You are CodeSmith, a local coding assistant. Work only through the supplied tools and stay focused on software-engineering work. General software-engineering questions are in scope even when they do not concern the selected project. For a mixed request, declare and perform only the software-engineering portion and list each excluded unrelated portion. For a fully unrelated request, call redirect_scope instead of declare_task. Use the current user request and fresh tool results as the primary evidence for execution. Historical conversation context may help interpret a follow-up, but it is not proof of the current workspace state. If evidence is missing, partial, stale, or conflicting, state what is unknown and request the exact missing input or inspect the workspace; never guess a consequential detail. First call exactly one routing tool, declare_task or redirect_scope, for each user submission. Preserve the user's goal in meaning, state 1 to 8 observable completion criteria, provide 1 to 8 concise ordered plan steps, and include an excludedRequests array; do not weaken requirements or guess missing decisions. Do not call workspace tools until task declaration succeeds. After declaration, the goal, completion criteria, and exclusions are immutable for that submission. Use revise_plan only when evidence changes the approach; replace the complete plan and state a concise reason. Do not mix routing, plan, or workspace calls. You may batch read-only workspace calls, but propose no more than one side-effecting workspace call in one response. Take the smallest useful next action. Treat truncated or paginated tool results as incomplete evidence and use their continuation fields when more context is needed. A brief reply such as 'yes', 'no', 'proceed', or 'do it' answers your immediately preceding unresolved question: act on that answer without asking the user to repeat context. When the user explicitly asks you to create, modify, rename, or remove code and the required details are available, call the appropriate tool immediately; do not ask for confirmation in your response because edits and commands have an approval gate in the tool. Never claim a file action succeeded unless its tool returned success. Inspect files before changing existing code. Never request, display, or infer environment secrets.",
     },
   ];
 
@@ -44,6 +54,7 @@ export class AgentLoop {
     private readonly emit: (event: AgentEvent) => void = () => {},
     private readonly isClosed: () => boolean = () => false,
     private readonly memory?: EpisodicMemory,
+    private readonly initializeMemory?: () => Promise<void>,
   ) {}
 
   async run(prompt: string): Promise<string> {
@@ -74,14 +85,36 @@ export class AgentLoop {
     this.trimHistory();
     const priorAssistantText = this.priorAssistantText();
     this.messages.push({ role: "user", content: prompt });
-    const declaredTask = await this.declareTask();
-    const contract = declaredTask.contract;
+    const route = await this.routeSubmission();
 
+    if ("response" in route) {
+      if (this.sessionStartPrompt === undefined) this.sessionStartPrompt = prompt;
+      if (this.provider.startIsolatedContinuation?.()) {
+        this.sessionStartContextCommitted = false;
+        this.sessionStartContextNeedsRefresh = true;
+      }
+      this.provider.continuationTransaction?.commit();
+      markReady();
+      this.messages.push({ role: "assistant", content: route.response });
+      this.emit({
+        type: "scope_redirected",
+        reason: route.reason,
+        suggestedRequest: route.suggestedRequest,
+      });
+      this.emit({ type: "assistant_text", text: route.response });
+      this.emit({ type: "status", phase: "complete" });
+      return route.response;
+    }
+
+    const contract = route.contract;
+    const executionPrompt = (contract.excludedRequests?.length ?? 0) > 0 ? contract.goal : prompt;
+
+    await this.initializeMemory?.();
     const memoryContext = this.memory
       ? await this.memory.retrieve(
           priorAssistantText
-            ? `${prompt}\n\nPrevious assistant answer:\n${priorAssistantText}`
-            : prompt,
+            ? `${executionPrompt}\n\nPrevious assistant answer:\n${priorAssistantText}`
+            : executionPrompt,
         )
       : undefined;
     this.memory?.startSubmission();
@@ -98,8 +131,8 @@ export class AgentLoop {
     let activePlan: readonly string[] | undefined;
     const executionMessages: ChatMessage[] = [
       this.messages[0] ?? { role: "system", content: "" },
-      { role: "user", content: prompt },
-      ...declaredTask.messages,
+      { role: "user", content: executionPrompt },
+      ...route.messages,
     ];
 
     while (true) {
@@ -169,20 +202,46 @@ export class AgentLoop {
       const planRevisionCalls = toolCalls.filter(
         (call) => call.function.name === planRevisionToolName,
       );
+      const scopeRedirectCalls = toolCalls.filter(
+        (call) => call.function.name === scopeRedirectToolName,
+      );
       const workspaceCalls = toolCalls.filter(
         (call) =>
           call.function.name !== taskContractToolName &&
-          call.function.name !== planRevisionToolName,
+          call.function.name !== planRevisionToolName &&
+          call.function.name !== scopeRedirectToolName,
       );
-      if ((hasTaskDeclaration || planRevisionCalls.length > 0) && workspaceCalls.length > 0) {
+      if (
+        (hasTaskDeclaration || planRevisionCalls.length > 0 || scopeRedirectCalls.length > 0) &&
+        workspaceCalls.length > 0
+      ) {
         for (const call of toolCalls) {
           const toolResult: ChatMessage = {
             role: "tool",
             content: JSON.stringify({
               error: hasTaskDeclaration
                 ? "A response cannot mix declare_task with workspace tools. Retry without workspace calls."
-                : "A response cannot mix revise_plan with workspace tools. Retry with the plan revision alone.",
+                : planRevisionCalls.length > 0
+                  ? "A response cannot mix revise_plan with workspace tools. Retry with the plan revision alone."
+                  : "A response cannot mix redirect_scope with workspace tools. Retry with the scope decision alone.",
             }),
+            tool_call_id: call.id,
+          };
+          this.messages.push(toolResult);
+          executionMessages.push(toolResult);
+        }
+        continue;
+      }
+
+      if (scopeRedirectCalls.length > 0) {
+        const error =
+          scopeRedirectCalls.length !== 1 || toolCalls.length !== 1
+            ? "A scope redirect must be the only tool call in the initial routing response."
+            : "The scope decision is immutable for this submission. Do not call redirect_scope again.";
+        for (const call of toolCalls) {
+          const toolResult: ChatMessage = {
+            role: "tool",
+            content: JSON.stringify({ error }),
             tool_call_id: call.id,
           };
           this.messages.push(toolResult);
@@ -293,44 +352,46 @@ export class AgentLoop {
     }
   }
 
-  private async declareTask(): Promise<DeclaredTask> {
-    let lastError = "The provider did not call declare_task.";
-    let declarationCallsUsed = 0;
+  private async routeSubmission(): Promise<DeclaredTask | ScopeRedirect> {
+    let lastError = "The provider did not call a routing tool.";
+    let routingCallsUsed = 0;
 
     for (let attempt = 0; attempt < AgentLoop.maximumTaskDeclarationAttempts; attempt += 1) {
       this.assertOpen();
       this.emit({ type: "status", phase: "thinking" });
       this.assertOpen();
       const providerMessages = this.messagesWithSessionStartContext();
-      this.emit(providerRequestEvent(0, providerMessages, 1));
+      const routingTools = [taskContractToolDefinition, scopeRedirectToolDefinition];
+      this.emit(providerRequestEvent(0, providerMessages, routingTools.length));
       this.assertOpen();
 
-      const response = await this.provider.complete(providerMessages, [taskContractToolDefinition]);
+      const response = await this.provider.complete(providerMessages, routingTools);
       this.assertOpen();
       const responseContent = normalizeAssistantText(response.content);
 
-      const declarationCalls = response.toolCalls.map((call, index) =>
-        normalizeToolCall(call, index),
-      );
-      declarationCallsUsed += declarationCalls.length;
-      if (declarationCallsUsed > AgentLoop.maximumToolCallsPerRun) {
+      const routingCalls = response.toolCalls.map((call, index) => normalizeToolCall(call, index));
+      routingCallsUsed += routingCalls.length;
+      if (routingCallsUsed > AgentLoop.maximumToolCallsPerRun) {
         throw new CodeSmithError(
           "loop",
-          "The agent exceeded the maximum number of tool calls during task declaration.",
+          "The agent exceeded the maximum number of tool calls during scope routing.",
         );
       }
-      const declarationCall =
-        declarationCalls.length === 1 && declarationCalls[0]?.function.name === taskContractToolName
-          ? declarationCalls[0]
+
+      const routingCall =
+        routingCalls.length === 1 &&
+        (routingCalls[0]?.function.name === taskContractToolName ||
+          routingCalls[0]?.function.name === scopeRedirectToolName)
+          ? routingCalls[0]
           : undefined;
-      if (declarationCall) {
-        const parsed = parseTaskContract(declarationCall.function.arguments);
+      if (routingCall?.function.name === taskContractToolName) {
+        const parsed = parseTaskContract(routingCall.function.arguments);
         if (parsed.valid) {
           this.assertHistoryCapacity(2);
           this.messages.push({
             role: "assistant",
             content: responseContent,
-            tool_calls: declarationCalls,
+            tool_calls: routingCalls,
           });
           this.acceptDeclarationCompletion(providerMessages);
           const contract = createTaskContract(parsed.input);
@@ -342,8 +403,9 @@ export class AgentLoop {
               goal: contract.goal,
               completionCriteria: contract.completionCriteria,
               plan: contract.plan,
+              excludedRequests: contract.excludedRequests ?? [],
             }),
-            tool_call_id: declarationCall.id,
+            tool_call_id: routingCall.id,
           };
           this.messages.push(declarationResult);
           this.emit({ type: "task_declared", contract });
@@ -353,16 +415,47 @@ export class AgentLoop {
               {
                 role: "assistant",
                 content: null,
-                tool_calls: declarationCalls,
+                tool_calls: routingCalls,
               },
               declarationResult,
             ],
           };
         }
         lastError = parsed.message;
+      } else if (routingCall?.function.name === scopeRedirectToolName) {
+        const parsed = parseScopeRedirect(routingCall.function.arguments);
+        if (parsed.valid) {
+          this.assertHistoryCapacity(2);
+          this.messages.push({
+            role: "assistant",
+            content: responseContent,
+            tool_calls: routingCalls,
+          });
+          this.acceptDeclarationCompletion(providerMessages);
+          const response = scopeRedirectResponse(
+            parsed.input.reason,
+            parsed.input.suggestedRequest,
+          );
+          const redirectResult: ChatMessage = {
+            role: "tool",
+            content: JSON.stringify({
+              status: "redirected",
+              reason: parsed.input.reason,
+              suggestedRequest: parsed.input.suggestedRequest,
+            }),
+            tool_call_id: routingCall.id,
+          };
+          this.messages.push(redirectResult);
+          return {
+            response,
+            reason: parsed.input.reason,
+            suggestedRequest: parsed.input.suggestedRequest,
+          };
+        }
+        lastError = parsed.message;
       } else {
         lastError =
-          "The first completion must contain exactly one declare_task call and no workspace tool calls.";
+          "The first completion must contain exactly one declare_task or redirect_scope call and no other tool calls.";
       }
 
       /*
@@ -371,17 +464,17 @@ export class AgentLoop {
        */
       if (attempt === AgentLoop.maximumTaskDeclarationAttempts - 1) break;
 
-      const additionalMessages = declarationCalls.length ? 1 + declarationCalls.length : 2;
+      const additionalMessages = routingCalls.length ? 1 + routingCalls.length : 2;
       this.assertHistoryCapacity(additionalMessages);
       this.messages.push({
         role: "assistant",
         content: responseContent,
-        tool_calls: declarationCalls,
+        tool_calls: routingCalls,
       });
       this.acceptDeclarationCompletion(providerMessages);
 
-      if (declarationCalls.length > 0) {
-        for (const call of declarationCalls) {
+      if (routingCalls.length > 0) {
+        for (const call of routingCalls) {
           this.messages.push({
             role: "tool",
             content: JSON.stringify({ error: lastError }),
@@ -392,7 +485,7 @@ export class AgentLoop {
         const retryFeedback: ChatMessage = {
           role: "user",
           content:
-            "Task declaration is required before any answer or workspace action. Call declare_task exactly once with a goal, 1 to 8 observable completion criteria, and 1 to 8 ordered plan steps.",
+            "Scope routing is required before any answer or workspace action. Call exactly one of declare_task or redirect_scope. Use declare_task for software-engineering work, including general questions, and include an excludedRequests array; use redirect_scope only for fully unrelated requests.",
         };
         this.retryFeedbackMessages.add(retryFeedback);
         this.messages.push(retryFeedback);
@@ -401,7 +494,7 @@ export class AgentLoop {
 
     throw new CodeSmithError(
       "loop",
-      `The agent could not declare a valid task contract after ${AgentLoop.maximumTaskDeclarationAttempts} attempts. ${lastError}`,
+      `The agent could not route the request after ${AgentLoop.maximumTaskDeclarationAttempts} attempts. ${lastError}`,
     );
   }
 
@@ -579,6 +672,12 @@ export class AgentLoop {
 
 function sessionStartContextContent(prompt: string): string {
   return `Session-start request:\n${prompt}`;
+}
+
+function scopeRedirectResponse(reason: string, suggestedRequest: string): string {
+  const safeReason = escapeTerminalText(reason.replace(/\s+/g, " ").trim());
+  const safeSuggestion = escapeTerminalText(suggestedRequest.replace(/\s+/g, " ").trim());
+  return `I can help with software-engineering work, but not with this request. ${safeReason} You can ask instead: ${safeSuggestion}`;
 }
 
 function providerRequestEvent(

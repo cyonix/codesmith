@@ -11,6 +11,7 @@ export type AgentEvent =
       plan: readonly string[];
       reason: string;
     }
+  | { type: "scope_redirected"; reason: string; suggestedRequest: string }
   | { type: "assistant_text"; text: string }
   | { type: "tool_proposed"; call: ToolCall }
   | { type: "tool_started"; call: ToolCall }

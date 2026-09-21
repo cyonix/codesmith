@@ -55,7 +55,10 @@ class CompactionProvider implements ChatProvider {
 
   complete(messages: ChatMessage[], tools: ToolDefinition[]): Promise<AssistantResponse> {
     this.messages.push([...messages]);
-    if (tools.length === 1) {
+    if (
+      tools.some((tool) => tool.function.name === "declare_task") &&
+      tools.some((tool) => tool.function.name === "redirect_scope")
+    ) {
       return Promise.resolve({
         toolCalls: [
           {
@@ -66,6 +69,7 @@ class CompactionProvider implements ChatProvider {
                 goal: "Inspect the project.",
                 completionCriteria: ["The requested result is returned."],
                 plan: ["Inspect the project.", "Report the result."],
+                excludedRequests: [],
               }),
             },
           },

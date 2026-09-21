@@ -13,6 +13,7 @@ void test("formats tagged debug lines for all agent events", () => {
         goal: "Inspect the project.",
         completionCriteria: ["The requested result is returned."],
         plan: ["Inspect the project.", "Report the result."],
+        excludedRequests: [],
       },
     }),
     "[task_declared] task-123 goal=Inspect the project. criteria=1. The requested result is returned. plan=1. Inspect the project. | 2. Report the result.",
@@ -29,6 +30,14 @@ void test("formats tagged debug lines for all agent events", () => {
       reason: "The scope changed.",
     }),
     "[plan_revised] task-123 reason=The scope changed. plan=1. Read the files. | 2. Run the tests.",
+  );
+  assert.equal(
+    formatDebugEvent({
+      type: "scope_redirected",
+      reason: "This is not software-engineering work.",
+      suggestedRequest: "Ask about testing.",
+    }),
+    "[scope_redirected] reason=This is not software-engineering work. suggested=Ask about testing.",
   );
   assert.equal(
     formatDebugEvent({
@@ -129,6 +138,7 @@ void test("redacts credentials and omits secret-file payloads", () => {
       taskId: "task-secret",
       goal: "Use apiKey: sk-abcdefghijklmnopqrstuvwxyz",
       plan: ["Keep the key private."],
+      excludedRequests: [],
       completionCriteria: ["Keep password=criterion-secret private."],
     },
   });
@@ -136,6 +146,13 @@ void test("redacts credentials and omits secret-file payloads", () => {
   assert.match(taskLine, /\[REDACTED\]/);
   assert.match(taskLine, /criteria=1\. Keep \[REDACTED\]/);
   assert.doesNotMatch(taskLine, /sk-abcdefghijklmnopqrstuvwxyz/);
+  const redirectLine = formatDebugEvent({
+    type: "scope_redirected",
+    reason: "Use apiKey: sk-abcdefghijklmnopqrstuvwxyz",
+    suggestedRequest: "Ask about testing.",
+  });
+  assert.match(redirectLine, /\[REDACTED\]/);
+  assert.doesNotMatch(redirectLine, /sk-abcdefghijklmnopqrstuvwxyz/);
   assert.equal(
     formatDebugEvent({
       type: "approval_requested",
@@ -262,6 +279,7 @@ void test("redacts task-contract completion criteria", () => {
       goal: "Inspect the project.",
       completionCriteria: ["API key: private-value"],
       plan: ["Keep API key: private-value private."],
+      excludedRequests: [],
     },
   });
 
@@ -277,6 +295,7 @@ void test("bounds the complete task-contract debug payload", () => {
       goal: "Inspect the project.",
       completionCriteria: Array.from({ length: 8 }, () => "é".repeat(300)),
       plan: Array.from({ length: 8 }, () => "é".repeat(300)),
+      excludedRequests: [],
     },
   });
   const prefix = "[task_declared] task-large ";

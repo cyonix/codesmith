@@ -2,7 +2,8 @@ import type { TaskContract } from "../agent/task-contract.js";
 import { escapeTerminalText } from "../shared/terminal-text.js";
 
 export function formatTaskContract(contract: TaskContract): string {
-  return [
+  const excludedRequests = contract.excludedRequests ?? [];
+  const lines = [
     `Task: ${normalizeContractText(contract.goal)}`,
     "Completion criteria:",
     ...contract.completionCriteria.map(
@@ -10,7 +11,16 @@ export function formatTaskContract(contract: TaskContract): string {
     ),
     "Plan:",
     ...formatPlanSteps(contract.plan),
-  ].join("\n");
+  ];
+  if (excludedRequests.length > 0) {
+    lines.push(
+      "Excluded unrelated requests:",
+      ...excludedRequests.map(
+        (request, index) => `${index + 1}. ${normalizeContractText(request)}`,
+      ),
+    );
+  }
+  return lines.join("\n");
 }
 
 export function formatPlanRevision(plan: readonly string[], reason: string): string {
