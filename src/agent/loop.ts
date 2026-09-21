@@ -39,6 +39,7 @@ export class AgentLoop {
   private sessionStartPrompt: string | undefined;
   private sessionStartContextCommitted = false;
   private sessionStartContextNeedsRefresh = false;
+  private redirectContextPending = false;
   private readonly messages: ChatMessage[] = [
     {
       role: "system",
@@ -62,6 +63,7 @@ export class AgentLoop {
     const previousSessionStartPrompt = this.sessionStartPrompt;
     const previousSessionStartContextCommitted = this.sessionStartContextCommitted;
     const previousSessionStartContextNeedsRefresh = this.sessionStartContextNeedsRefresh;
+    const previousRedirectContextPending = this.redirectContextPending;
     const continuationTransaction = this.provider.continuationTransaction;
     continuationTransaction?.begin();
     let submissionReady = false;
@@ -75,6 +77,7 @@ export class AgentLoop {
         this.sessionStartPrompt = previousSessionStartPrompt;
         this.sessionStartContextCommitted = previousSessionStartContextCommitted;
         this.sessionStartContextNeedsRefresh = previousSessionStartContextNeedsRefresh;
+        this.redirectContextPending = previousRedirectContextPending;
         continuationTransaction?.rollback();
       }
       throw error;
@@ -82,7 +85,8 @@ export class AgentLoop {
   }
 
   private async runSubmission(prompt: string, markReady: () => void): Promise<string> {
-    this.trimHistory();
+    if (this.redirectContextPending) this.redirectContextPending = false;
+    else this.trimHistory();
     const priorAssistantText = this.priorAssistantText();
     this.messages.push({ role: "user", content: prompt });
     const route = await this.routeSubmission();
@@ -92,6 +96,7 @@ export class AgentLoop {
       this.provider.continuationTransaction?.commit();
       markReady();
       this.messages.push({ role: "assistant", content: route.response });
+      this.redirectContextPending = true;
       this.emit({
         type: "scope_redirected",
         reason: route.reason,

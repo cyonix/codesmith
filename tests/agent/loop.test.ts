@@ -266,7 +266,20 @@ void test("preserves Gemini redirect context for a follow-up submission", async 
     input: Array<{ type: string; content?: string }>;
   };
   assert.equal(followUpPayload.previous_interaction_id, "redirect-interaction");
-  assert.deepEqual(followUpPayload.input, [{ type: "user_input", content: "Why?" }]);
+  assert.deepEqual(followUpPayload.input, [
+    {
+      type: "function_result",
+      name: "redirect_scope",
+      call_id: "redirect-1",
+      result: [
+        {
+          type: "text",
+          text: '{"status":"redirected","reason":"This is not software-engineering work.","suggestedRequest":"Ask how to test a TypeScript function."}',
+        },
+      ],
+    },
+    { type: "user_input", content: "Why?" },
+  ]);
 });
 void test("revises the plan with evidence before the next workspace action", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));

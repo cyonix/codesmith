@@ -121,9 +121,14 @@ function geminiInteractionInput(
     for (const call of message.tool_calls ?? []) toolNames.set(call.id, call.function.name);
   }
   const lastAssistant = messages.map((message) => message.role).lastIndexOf("assistant");
-  const pendingMessages = messages
-    .slice(lastAssistant + 1)
-    .filter((message) => message.role !== "system");
+  const redirectResultIndex =
+    includePendingFunctionResults && lastAssistant >= 0
+      ? latestPendingRedirectResultIndex(messages, toolNames, lastAssistant)
+      : -1;
+  const pendingMessages = messages.slice(lastAssistant + 1).filter((message, index) => {
+    const messageIndex = lastAssistant + 1 + index;
+    return message.role !== "system" && messageIndex !== redirectResultIndex;
+  });
 
   if (!pendingMessages.length) {
     throw new CodeSmithError(
@@ -133,6 +138,10 @@ function geminiInteractionInput(
   }
 
   const input: unknown[] = [];
+  if (redirectResultIndex >= 0) {
+    const redirectResult = messages[redirectResultIndex];
+    if (redirectResult) input.push(geminiFunctionResultInput(redirectResult, toolNames));
+  }
 
   for (const message of pendingMessages) {
     if (message.role === "user") {
@@ -141,23 +150,50 @@ function geminiInteractionInput(
     }
 
     if (message.role !== "tool" || !includePendingFunctionResults) continue;
-
-    const name = message.tool_call_id ? toolNames.get(message.tool_call_id) : undefined;
-    if (!name || !message.tool_call_id) {
-      throw new CodeSmithError(
-        "provider",
-        "A Gemini tool result did not match a preceding function call.",
-      );
-    }
-
-    input.push({
-      type: "function_result",
-      name,
-      call_id: message.tool_call_id,
-      result: [{ type: "text", text: message.content ?? "" }],
-    });
+    input.push(geminiFunctionResultInput(message, toolNames));
   }
   return input;
+}
+
+function latestPendingRedirectResultIndex(
+  messages: ChatMessage[],
+  toolNames: ReadonlyMap<string, string>,
+  lastAssistantIndex: number,
+): number {
+  for (let index = lastAssistantIndex - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role !== "assistant") continue;
+    const redirectCall = message.tool_calls?.find(
+      (call) => toolNames.get(call.id) === "redirect_scope",
+    );
+    if (!redirectCall) continue;
+    for (let resultIndex = index + 1; resultIndex < lastAssistantIndex; resultIndex += 1) {
+      const result = messages[resultIndex];
+      if (result?.role === "tool" && result.tool_call_id === redirectCall.id) {
+        return resultIndex;
+      }
+    }
+  }
+  return -1;
+}
+
+function geminiFunctionResultInput(
+  message: ChatMessage,
+  toolNames: ReadonlyMap<string, string>,
+): unknown {
+  const name = message.tool_call_id ? toolNames.get(message.tool_call_id) : undefined;
+  if (!name || !message.tool_call_id) {
+    throw new CodeSmithError(
+      "provider",
+      "A Gemini tool result did not match a preceding function call.",
+    );
+  }
+  return {
+    type: "function_result",
+    name,
+    call_id: message.tool_call_id,
+    result: [{ type: "text", text: message.content ?? "" }],
+  };
 }
 
 function geminiIsolatedInteractionInput(messages: ChatMessage[]): unknown[] {
