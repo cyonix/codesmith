@@ -84,8 +84,8 @@ export class AgentLoop {
   }
 
   private async runSubmission(prompt: string, markReady: () => void): Promise<string> {
-    if (this.redirectContextPending) this.redirectContextPending = false;
-    else this.trimHistory();
+    this.trimHistory();
+    this.redirectContextPending = false;
     const priorAssistantText = this.priorAssistantText();
     this.messages.push({ role: "user", content: prompt });
     const route = await this.routeSubmission();
@@ -580,6 +580,10 @@ export class AgentLoop {
   }
 
   private trimHistory(): void {
+    if (this.redirectContextPending) {
+      this.trimPendingRedirectHistory();
+      return;
+    }
     const maximumPriorMessages =
       AgentLoop.maximumHistoryMessages - AgentLoop.maximumToolCallsPerRun * 2 - 4;
 
@@ -594,6 +598,55 @@ export class AgentLoop {
       }
       this.messages.splice(1, nextUser - 1);
     }
+  }
+
+  private trimPendingRedirectHistory(): void {
+    if (this.messages.length <= AgentLoop.maximumHistoryMessages - 3) return;
+
+    let redirectAssistantIndex = -1;
+    for (let index = this.messages.length - 1; index >= 1; index -= 1) {
+      const message = this.messages[index];
+      if (
+        message?.role === "assistant" &&
+        message.tool_calls?.some((call) => call.function.name === scopeRedirectToolName)
+      ) {
+        redirectAssistantIndex = index;
+        break;
+      }
+    }
+    if (redirectAssistantIndex < 0) return;
+
+    const redirectAssistant = this.messages[redirectAssistantIndex];
+    const redirectCall = redirectAssistant?.tool_calls?.find(
+      (call) => call.function.name === scopeRedirectToolName,
+    );
+    if (!redirectAssistant || !redirectCall) return;
+
+    const redirectResultIndex = this.messages.findIndex(
+      (message, index) =>
+        index > redirectAssistantIndex &&
+        message.role === "tool" &&
+        message.tool_call_id === redirectCall.id,
+    );
+    if (redirectResultIndex < 0) return;
+
+    const redirectResponse = this.messages.find(
+      (message, index) =>
+        index > redirectResultIndex && message.role === "assistant" && !message.tool_calls?.length,
+    );
+    const redirectUser = [...this.messages]
+      .slice(1, redirectAssistantIndex)
+      .reverse()
+      .find((message) => message.role === "user" && !this.retryFeedbackMessages.has(message));
+    const systemMessage = this.messages[0];
+    const redirectResult = this.messages[redirectResultIndex];
+    if (!systemMessage || !redirectResult) return;
+
+    const compacted = [systemMessage];
+    if (redirectUser) compacted.push(redirectUser);
+    compacted.push(redirectAssistant, redirectResult);
+    if (redirectResponse) compacted.push(redirectResponse);
+    this.messages.splice(0, this.messages.length, ...compacted);
   }
 
   private compactLatestTurn(): void {

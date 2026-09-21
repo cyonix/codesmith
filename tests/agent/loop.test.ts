@@ -201,6 +201,21 @@ void test("redirects fully unrelated requests before memory or workspace access"
   );
   assert.equal(provider.messages.length, 1);
 });
+void test("compacts consecutive redirects while preserving the latest redirect context", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const provider = new MockProvider(
+    Array.from({ length: 12 }, () => ({ toolCalls: [scopeRedirectCall()] })),
+    false,
+  );
+  const loop = new AgentLoop(provider, await ToolExecutor.create(root, true));
+
+  for (let index = 0; index < 12; index += 1) {
+    assert.match(await loop.run(`Unrelated request ${index}`), /not software-engineering work/);
+  }
+
+  assert.ok(provider.messages.every((messages) => messages.length <= 32));
+});
 void test("preserves Gemini redirect context for a follow-up submission", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
   context.after(async () => rm(root, { recursive: true, force: true }));
