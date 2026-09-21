@@ -601,7 +601,7 @@ export class AgentLoop {
   }
 
   private trimPendingRedirectHistory(): void {
-    if (this.messages.length <= AgentLoop.maximumHistoryMessages - 3) return;
+    if (this.messages.length <= AgentLoop.maximumHistoryMessages - 5) return;
 
     let redirectAssistantIndex = -1;
     for (let index = this.messages.length - 1; index >= 1; index -= 1) {
@@ -793,31 +793,39 @@ function sanitizeExcludedText(value: string, excludedRequests: readonly string[]
   const segments = [
     ...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(value),
   ].map(({ segment }) => segment);
-  const normalizedSegments = segments.map(normalizeExcludedText);
   let sanitized = "";
   for (let index = 0; index < segments.length;) {
-    const match = matches.find(({ normalized }) => {
-      let candidate = "";
-      for (let end = index; end < normalizedSegments.length; end += 1) {
-        candidate += normalizedSegments[end];
-        if (candidate === normalized) return true;
-        if (candidate.length >= normalized.length) break;
-      }
-      return false;
-    });
+    const match = matches
+      .map(({ normalized, original }) => ({
+        end: excludedMatchEnd(segments, index, normalized),
+        normalized,
+        original,
+      }))
+      .find(({ end }) => end >= 0);
     if (match) {
       sanitized += "[excluded request omitted]";
-      let candidate = "";
-      do {
-        candidate += normalizedSegments[index];
-        index += 1;
-      } while (candidate !== match.normalized && index < normalizedSegments.length);
+      index = match.end;
     } else {
       sanitized += segments[index];
       index += 1;
     }
   }
   return sanitized;
+}
+
+function excludedMatchEnd(
+  segments: readonly string[],
+  start: number,
+  normalizedTarget: string,
+): number {
+  let candidate = "";
+  for (let end = start; end < segments.length; end += 1) {
+    candidate += segments[end];
+    const normalizedCandidate = normalizeExcludedText(candidate);
+    if (normalizedCandidate === normalizedTarget) return end + 1;
+    if (normalizedCandidate.length >= normalizedTarget.length) break;
+  }
+  return -1;
 }
 
 function normalizeExcludedText(value: string): string {

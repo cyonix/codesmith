@@ -179,10 +179,10 @@ void test("sanitizes case and Unicode variants of excluded requests", async (con
             function: {
               name: "declare_task",
               arguments: JSON.stringify({
-                goal: "Explain tests and plan a cafe\u0301.",
+                goal: "Explain tests and plan a cafe\u0301. Also explain ΟΣ.",
                 completionCriteria: ["The explanation is complete."],
                 plan: ["Explain the test structure."],
-                excludedRequests: ["PLAN A CAFÉ."],
+                excludedRequests: ["PLAN A CAFÉ.", "ος"],
               }),
             },
           },
@@ -199,7 +199,7 @@ void test("sanitizes case and Unicode variants of excluded requests", async (con
   );
   assert.equal(
     provider.messages[1]?.find((message) => message.role === "user")?.content,
-    "Explain tests and [excluded request omitted]",
+    "Explain tests and [excluded request omitted] Also explain [excluded request omitted].",
   );
 });
 void test("redirects fully unrelated requests before memory or workspace access", async (context) => {
@@ -250,6 +250,33 @@ void test("compacts consecutive redirects while preserving the latest redirect c
   }
 
   assert.ok(provider.messages.every((messages) => messages.length <= 32));
+});
+void test("reserves history for a routing retry after repeated redirects", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const provider = new MockProvider(
+    [
+      ...Array.from({ length: 7 }, () => ({ toolCalls: [scopeRedirectCall()] })),
+      {
+        toolCalls: [
+          {
+            id: "invalid-route",
+            function: { name: "declare_task", arguments: '{"goal":"Explain tests."}' },
+          },
+        ],
+      },
+      { toolCalls: [taskDeclarationCall()] },
+      { content: "The retry succeeded.", toolCalls: [] },
+    ],
+    false,
+  );
+  const loop = new AgentLoop(provider, await ToolExecutor.create(root, true));
+
+  for (let index = 0; index < 7; index += 1) {
+    await loop.run(`Unrelated request ${index}`);
+  }
+
+  assert.equal(await loop.run("Explain tests."), "The retry succeeded.");
 });
 void test("preserves Gemini redirect context for a follow-up submission", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
