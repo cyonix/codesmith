@@ -746,22 +746,22 @@ function sanitizeExecutionMessages(
     throw new CodeSmithError("loop", "The task declaration execution context is incomplete.");
   }
 
+  const sanitize = createExcludedTextSanitizer(excludedRequests);
+  const sanitizedGoal = sanitize(contract.goal);
+  const sanitizedCompletionCriteria = contract.completionCriteria.map(sanitize);
+  const sanitizedPlan = contract.plan.map(sanitize);
   const declarationArguments = JSON.stringify({
-    goal: sanitizeExcludedText(contract.goal, excludedRequests),
-    completionCriteria: contract.completionCriteria.map((criterion) =>
-      sanitizeExcludedText(criterion, excludedRequests),
-    ),
-    plan: contract.plan.map((step) => sanitizeExcludedText(step, excludedRequests)),
+    goal: sanitizedGoal,
+    completionCriteria: sanitizedCompletionCriteria,
+    plan: sanitizedPlan,
     excludedRequests: [],
   });
   const declarationResult = JSON.stringify({
     status: "declared",
     taskId: contract.taskId,
-    goal: sanitizeExcludedText(contract.goal, excludedRequests),
-    completionCriteria: contract.completionCriteria.map((criterion) =>
-      sanitizeExcludedText(criterion, excludedRequests),
-    ),
-    plan: contract.plan.map((step) => sanitizeExcludedText(step, excludedRequests)),
+    goal: sanitizedGoal,
+    completionCriteria: sanitizedCompletionCriteria,
+    plan: sanitizedPlan,
     excludedRequests: [],
   });
 
@@ -785,54 +785,108 @@ function sanitizeExecutionMessages(
 }
 
 function sanitizeExcludedText(value: string, excludedRequests: readonly string[]): string {
+  return createExcludedTextSanitizer(excludedRequests)(value);
+}
+
+function createExcludedTextSanitizer(
+  excludedRequests: readonly string[],
+): (value: string) => string {
   const matches = excludedRequests
     .filter((excludedRequest) => excludedRequest.length > 0)
-    .map((excludedRequest) => ({
-      normalized: normalizeExcludedText(excludedRequest),
-    }))
+    .map((excludedRequest) => {
+      const normalized = normalizeExcludedText(excludedRequest);
+      return { normalized, searchKey: foldExcludedText(normalized) };
+    })
     .sort((left, right) => right.normalized.length - left.normalized.length);
-  const segments = [
-    ...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(value),
-  ].map(({ segment }) => segment);
-  let sanitized = "";
-  for (let index = 0; index < segments.length;) {
-    const match = matches
-      .map(({ normalized }) => ({
-        end: excludedMatchEnd(segments, index, normalized),
-        normalized,
-      }))
-      .find(({ end }) => end >= 0);
-    if (match) {
-      sanitized += "[excluded request omitted]";
-      index = match.end;
-    } else {
-      sanitized += segments[index];
-      index += 1;
+  return (value: string): string => {
+    const segments = [
+      ...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(value),
+    ].map(({ segment }) => segment);
+    const normalizedSegments: string[] = [];
+    const searchSegments: string[] = [];
+    let previousWasWhitespace = false;
+    for (const segment of segments) {
+      let normalized = normalizeExcludedText(segment);
+      if (previousWasWhitespace && normalized === " ") normalized = "";
+      previousWasWhitespace = normalized === " " || (previousWasWhitespace && normalized === "");
+      normalizedSegments.push(normalized);
+      searchSegments.push(foldExcludedText(normalized));
     }
-  }
-  return sanitized;
+    const searchText = searchSegments.join("");
+    const searchOffsets = [0];
+    let searchOffset = 0;
+    for (const searchSegment of searchSegments) {
+      searchOffset += searchSegment.length;
+      searchOffsets.push(searchOffset);
+    }
+    const searchBoundaryIndexes = new Map(searchOffsets.map((offset, index) => [offset, index]));
+
+    let sanitized = "";
+    for (let index = 0; index < segments.length;) {
+      let matchEnd = -1;
+      for (const { searchKey } of matches) {
+        const searchStart = searchOffsets[index] ?? 0;
+        const searchEnd = searchStart + searchKey.length;
+        const fastMatchEnd = searchBoundaryIndexes.get(searchEnd);
+        if (searchText.startsWith(searchKey, searchStart) && fastMatchEnd !== undefined) {
+          matchEnd = fastMatchEnd;
+          break;
+        }
+      }
+      if (matchEnd < 0) {
+        for (const { normalized, searchKey } of matches) {
+          if (canSkipExcludedCollation(searchSegments[index] ?? "", searchKey)) continue;
+          matchEnd = excludedMatchEnd(normalizedSegments, index, normalized);
+          if (matchEnd >= 0) break;
+        }
+      }
+      if (matchEnd >= 0) {
+        sanitized += "[excluded request omitted]";
+        index = matchEnd;
+      } else {
+        sanitized += segments[index];
+        index += 1;
+      }
+    }
+    return sanitized;
+  };
 }
 
 function excludedMatchEnd(
-  segments: readonly string[],
+  normalizedSegments: readonly string[],
   start: number,
   normalizedTarget: string,
 ): number {
   let candidate = "";
   const maximumEnd = Math.min(
-    segments.length,
+    normalizedSegments.length,
     start + Math.max(normalizedTarget.length * 3, normalizedTarget.length + 4),
   );
   for (let end = start; end < maximumEnd; end += 1) {
-    candidate += segments[end];
-    const normalizedCandidate = normalizeExcludedText(candidate);
-    if (excludedTextCollator.compare(normalizedCandidate, normalizedTarget) === 0) return end + 1;
+    candidate += normalizedSegments[end];
+    if (excludedTextCollator.compare(candidate, normalizedTarget) === 0) return end + 1;
   }
   return -1;
 }
 
 function normalizeExcludedText(value: string): string {
   return value.normalize("NFKC").replace(/\s+/gu, " ");
+}
+
+function foldExcludedText(value: string): string {
+  return value.toLocaleLowerCase("und").replaceAll("ß", "ss");
+}
+
+function canSkipExcludedCollation(sourceSegment: string, target: string): boolean {
+  const sourceFirst = [...sourceSegment][0];
+  const targetFirst = [...target][0];
+  return (
+    sourceFirst !== undefined &&
+    targetFirst !== undefined &&
+    sourceFirst !== targetFirst &&
+    sourceFirst.charCodeAt(0) < 128 &&
+    targetFirst.charCodeAt(0) < 128
+  );
 }
 
 const excludedTextCollator = new Intl.Collator("und", {

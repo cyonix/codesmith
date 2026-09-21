@@ -202,6 +202,61 @@ void test("sanitizes case and Unicode variants of excluded requests", async (con
     "Explain tests and [excluded request omitted] Also explain [excluded request omitted] and [excluded request omitted].",
   );
 });
+void test("sanitizes bounded large contracts with all exclusions", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const excludedRequests = [
+    "unrelated request alpha",
+    "unrelated request beta",
+    "unrelated request gamma",
+    "unrelated request delta",
+    "unrelated request epsilon",
+    "unrelated request zeta",
+    "unrelated request eta",
+    "unrelated request theta",
+  ];
+  const repeatedContext = "engineering context ".repeat(12);
+  const provider = new MockProvider(
+    [
+      {
+        toolCalls: [
+          {
+            id: "task-large",
+            function: {
+              name: "declare_task",
+              arguments: JSON.stringify({
+                goal: `${repeatedContext} ${excludedRequests.join(" and ")} ${repeatedContext}`.slice(
+                  0,
+                  500,
+                ),
+                completionCriteria: Array.from(
+                  { length: 8 },
+                  (_, index) =>
+                    `${repeatedContext}criterion ${index} ${excludedRequests[index] ?? ""}`,
+                ),
+                plan: Array.from(
+                  { length: 8 },
+                  (_, index) => `${repeatedContext}step ${index} ${excludedRequests[index] ?? ""}`,
+                ),
+                excludedRequests,
+              }),
+            },
+          },
+        ],
+      },
+      { content: "The bounded contract was sanitized.", toolCalls: [] },
+    ],
+    false,
+  );
+
+  await new AgentLoop(provider, await ToolExecutor.create(root, true)).run("Complete the task.");
+
+  const executionMessages = provider.messages[1] ?? [];
+  const serializedExecutionMessages = JSON.stringify(executionMessages);
+  for (const excludedRequest of excludedRequests)
+    assert.equal(serializedExecutionMessages.includes(excludedRequest), false);
+  assert.ok(serializedExecutionMessages.includes("[excluded request omitted]"));
+});
 void test("redirects fully unrelated requests before memory or workspace access", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
   context.after(async () => rm(root, { recursive: true, force: true }));
