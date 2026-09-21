@@ -134,7 +134,7 @@ export class AgentLoop {
     const executionMessages: ChatMessage[] = [
       this.messages[0] ?? { role: "system", content: "" },
       { role: "user", content: executionPrompt },
-      ...sanitizeExecutionMessages(route.messages, excludedRequests),
+      ...sanitizeExecutionMessages(route.messages, contract),
     ];
 
     while (true) {
@@ -674,26 +674,55 @@ export class AgentLoop {
 
 function sanitizeExecutionMessages(
   messages: readonly ChatMessage[],
-  excludedRequests: readonly string[],
+  contract: TaskContract,
 ): ChatMessage[] {
+  const excludedRequests = contract.excludedRequests ?? [];
   if (excludedRequests.length === 0) return [...messages];
 
-  return messages.map((message) => ({
-    ...message,
-    content:
-      message.role === "assistant"
-        ? null
-        : typeof message.content !== "string"
-          ? message.content
-          : sanitizeExcludedText(message.content, excludedRequests),
-    tool_calls: message.tool_calls?.map((call) => ({
-      ...call,
-      function: {
-        ...call.function,
-        arguments: sanitizeExcludedText(call.function.arguments, excludedRequests),
-      },
-    })),
-  }));
+  const assistantMessage = messages.find(
+    (message) =>
+      message.role === "assistant" &&
+      message.tool_calls?.some((call) => call.function.name === taskContractToolName),
+  );
+  const declarationCall = assistantMessage?.tool_calls?.find(
+    (call) => call.function.name === taskContractToolName,
+  );
+  if (!assistantMessage || !declarationCall) {
+    throw new CodeSmithError("loop", "The task declaration execution context is incomplete.");
+  }
+
+  const declarationArguments = JSON.stringify({
+    goal: contract.goal,
+    completionCriteria: contract.completionCriteria,
+    plan: contract.plan,
+    excludedRequests: [],
+  });
+  const declarationResult = JSON.stringify({
+    status: "declared",
+    taskId: contract.taskId,
+    goal: contract.goal,
+    completionCriteria: contract.completionCriteria,
+    plan: contract.plan,
+    excludedRequests: [],
+  });
+
+  return [
+    {
+      ...assistantMessage,
+      content: null,
+      tool_calls: [
+        {
+          ...declarationCall,
+          function: { ...declarationCall.function, arguments: declarationArguments },
+        },
+      ],
+    },
+    {
+      role: "tool",
+      content: declarationResult,
+      tool_call_id: declarationCall.id,
+    },
+  ];
 }
 
 function sanitizeExcludedText(value: string, excludedRequests: readonly string[]): string {

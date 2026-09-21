@@ -116,7 +116,7 @@ void test("narrows mixed requests before workspace execution", async (context) =
                 goal: "Explain how to test a TypeScript function.",
                 completionCriteria: ["The testing approach is explained."],
                 plan: ["Describe a focused test structure."],
-                excludedRequests: ["Plan a vacation."],
+                excludedRequests: ['Plan "a"\\b\nvacation.'],
               }),
             },
           },
@@ -136,7 +136,7 @@ void test("narrows mixed requests before workspace execution", async (context) =
   const declaration = events.find((event) => event.type === "task_declared");
   assert.equal(declaration?.type, "task_declared");
   if (declaration?.type === "task_declared")
-    assert.deepEqual(declaration.contract.excludedRequests, ["Plan a vacation."]);
+    assert.deepEqual(declaration.contract.excludedRequests, ['Plan "a"\\b\nvacation.']);
   assert.equal(
     events.some((event) => event.type === "scope_redirected"),
     false,
@@ -154,7 +154,13 @@ void test("narrows mixed requests before workspace execution", async (context) =
     ),
   );
   assert.equal(
-    provider.messages[1]?.some((message) => JSON.stringify(message).includes("Plan a vacation.")),
+    provider.messages[1]?.some((message) => {
+      const serialized = JSON.stringify(message);
+      return (
+        serialized.includes('Plan "a"\\b\nvacation.') ||
+        serialized.includes(JSON.stringify('Plan "a"\\b\nvacation.'))
+      );
+    }),
     false,
   );
 });
