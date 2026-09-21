@@ -28,6 +28,7 @@ export class AgentLoop {
   private readonly retryFeedbackMessages = new WeakSet<ChatMessage>();
   private sessionStartPrompt: string | undefined;
   private sessionStartContextCommitted = false;
+  private sessionStartContextNeedsRefresh = false;
   private readonly messages: ChatMessage[] = [
     {
       role: "system",
@@ -49,6 +50,7 @@ export class AgentLoop {
     const previousMessages = this.messages.slice();
     const previousSessionStartPrompt = this.sessionStartPrompt;
     const previousSessionStartContextCommitted = this.sessionStartContextCommitted;
+    const previousSessionStartContextNeedsRefresh = this.sessionStartContextNeedsRefresh;
     const continuationTransaction = this.provider.continuationTransaction;
     continuationTransaction?.begin();
     let submissionReady = false;
@@ -61,6 +63,7 @@ export class AgentLoop {
         this.messages.splice(0, this.messages.length, ...previousMessages);
         this.sessionStartPrompt = previousSessionStartPrompt;
         this.sessionStartContextCommitted = previousSessionStartContextCommitted;
+        this.sessionStartContextNeedsRefresh = previousSessionStartContextNeedsRefresh;
         continuationTransaction?.rollback();
       }
       throw error;
@@ -83,7 +86,10 @@ export class AgentLoop {
       : undefined;
     this.memory?.startSubmission();
     if (this.sessionStartPrompt === undefined) this.sessionStartPrompt = prompt;
-    this.provider.startIsolatedContinuation?.();
+    if (this.provider.startIsolatedContinuation?.()) {
+      this.sessionStartContextCommitted = false;
+      this.sessionStartContextNeedsRefresh = true;
+    }
     this.provider.continuationTransaction?.commit();
     markReady();
 
@@ -421,13 +427,14 @@ export class AgentLoop {
     const sessionStartPrompt = this.sessionStartPrompt;
     if (
       sessionStartPrompt === undefined ||
-      (this.sessionStartContextCommitted && this.provider.continuationTransaction) ||
-      this.messages.some(
-        (message) =>
-          message.role === "user" &&
-          message.content === sessionStartPrompt &&
-          !this.retryFeedbackMessages.has(message),
-      )
+      (!this.sessionStartContextNeedsRefresh &&
+        ((this.sessionStartContextCommitted && this.provider.continuationTransaction) ||
+          this.messages.some(
+            (message) =>
+              message.role === "user" &&
+              message.content === sessionStartPrompt &&
+              !this.retryFeedbackMessages.has(message),
+          )))
     )
       return this.messages;
 
@@ -466,6 +473,7 @@ export class AgentLoop {
       )
     )
       this.sessionStartContextCommitted = true;
+    this.sessionStartContextNeedsRefresh = false;
   }
 
   private priorAssistantText(): string | undefined {

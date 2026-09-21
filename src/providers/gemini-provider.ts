@@ -74,12 +74,13 @@ export class GeminiProvider extends ProviderClient {
     this.isolatedContinuationPending = false;
   }
 
-  startIsolatedContinuation(): void {
+  startIsolatedContinuation(): boolean {
     this.previousInteractionId = undefined;
     this.previousInteractionHasToolCalls = false;
     this.pendingInteractionId = undefined;
     this.pendingInteractionHasToolCalls = false;
     this.isolatedContinuationPending = true;
+    return true;
   }
 
   beginContinuationTransaction(): void {

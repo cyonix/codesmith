@@ -775,6 +775,7 @@ void test("does not replay consumed Gemini tool results after history compaction
   };
   assert.equal(secondDeclarationPayload.previous_interaction_id, "interaction-3");
   assert.deepEqual(secondDeclarationPayload.input, [
+    { type: "user_input", content: "Session-start request:\nInspect the project." },
     { type: "user_input", content: "Inspect it again." },
   ]);
 });
@@ -820,8 +821,9 @@ void test("preserves session-start context in Gemini declaration input after com
   const recoveredContextPayloads = declarationPayloads.filter((payload) =>
     payload.input.some((input) => input.content === `Session-start request:\n${initialPrompt}`),
   );
-  assert.equal(recoveredContextPayloads.length, 1);
+  assert.equal(recoveredContextPayloads.length, declarationPayloads.length - 1);
   assert.deepEqual(declarationPayloads.at(-1)?.input, [
+    { type: "user_input", content: `Session-start request:\n${initialPrompt}` },
     { type: "user_input", content: "What should I do next?" },
   ]);
 });

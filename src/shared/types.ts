@@ -32,6 +32,6 @@ export interface ContinuationTransaction {
 export interface ChatProvider {
   complete(messages: ChatMessage[], tools: ToolDefinition[]): Promise<AssistantResponse>;
   acceptCompletion?(): void;
-  startIsolatedContinuation?(): void;
+  startIsolatedContinuation?(): boolean;
   readonly continuationTransaction?: ContinuationTransaction;
 }

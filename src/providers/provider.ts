@@ -50,7 +50,7 @@ export class ModelProvider implements ChatProvider {
     this.implementation.acceptCompletion?.();
   }
 
-  startIsolatedContinuation(): void {
-    this.implementation.startIsolatedContinuation?.();
+  startIsolatedContinuation(): boolean {
+    return this.implementation.startIsolatedContinuation?.() ?? false;
   }
 }

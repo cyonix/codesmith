@@ -28,7 +28,7 @@ displays the contract and plan without treating them as approval prompts.
 
 Execution uses only the current submission, its task contract, plan revisions,
 and fresh tool results. Read-only evidence is bounded: `read_file` returns up to
-200 lines and 20 KiB at a time and supports `start_line` for the next page.
+200 lines and 20 KB at a time and supports `start_line` for the next page.
 Oversized lines return `next_start_offset`, which can be passed as
 `start_offset` to continue the same line;
 `list_files` and `search_files` report pagination or truncation when their
