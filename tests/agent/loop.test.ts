@@ -87,7 +87,7 @@ void test("requires and emits a bounded task contract before workspace work", as
   ).run("Inspect the project.");
 
   assert.equal(result, "Completed.");
-  assert.equal(provider.requestedTools[0]?.length, 1);
+  assert.equal(provider.requestedTools[0]?.length, 2);
   assert.equal(provider.requestedTools[0]?.[0]?.function.name, "declare_task");
   assert.ok((provider.requestedTools[1]?.length ?? 0) > 1);
   const declaration = events.find((event) => event.type === "task_declared");
@@ -99,6 +99,346 @@ void test("requires and emits a bounded task contract before workspace work", as
     ]);
     assert.match(declaration.contract.taskId, /^[0-9a-f-]{36}$/);
   }
+});
+void test("narrows mixed requests before workspace execution", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const events: AgentEvent[] = [];
+  const provider = new MockProvider(
+    [
+      {
+        toolCalls: [
+          {
+            id: "task-mixed",
+            function: {
+              name: "declare_task",
+              arguments: JSON.stringify({
+                goal: "Explain how to test a TypeScript function.",
+                completionCriteria: [
+                  'The testing approach is explained without Plan "a"\\b\nvacation.',
+                ],
+                plan: ['Describe a focused test structure without Plan "a"\\b\nvacation.'],
+                excludedRequests: ["Plan", 'Plan "a"\\b\nvacation.'],
+              }),
+            },
+          },
+        ],
+      },
+      { content: "Use a focused unit test.", toolCalls: [] },
+    ],
+    false,
+  );
+
+  assert.equal(
+    await new AgentLoop(provider, await ToolExecutor.create(root, true), 12, (event) =>
+      events.push(event),
+    ).run("Explain TypeScript testing and plan a vacation."),
+    "Use a focused unit test.",
+  );
+  const declaration = events.find((event) => event.type === "task_declared");
+  assert.equal(declaration?.type, "task_declared");
+  if (declaration?.type === "task_declared")
+    assert.deepEqual(declaration.contract.excludedRequests, ["Plan", 'Plan "a"\\b\nvacation.']);
+  assert.equal(
+    events.some((event) => event.type === "scope_redirected"),
+    false,
+  );
+  assert.equal(
+    provider.messages[1]?.some(
+      (message) => message.role === "user" && message.content === "Plan a vacation.",
+    ),
+    false,
+  );
+  assert.ok(
+    provider.messages[1]?.some(
+      (message) =>
+        message.role === "user" && message.content === "Explain how to test a TypeScript function.",
+    ),
+  );
+  assert.equal(
+    provider.messages[1]?.some((message) => {
+      const serialized = JSON.stringify(message);
+      return (
+        serialized.includes('Plan "a"\\b\nvacation.') ||
+        serialized.includes(JSON.stringify('Plan "a"\\b\nvacation.')) ||
+        serialized.includes("vacation.")
+      );
+    }),
+    false,
+  );
+});
+void test("sanitizes case and Unicode variants of excluded requests", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const provider = new MockProvider(
+    [
+      {
+        toolCalls: [
+          {
+            id: "task-normalized",
+            function: {
+              name: "declare_task",
+              arguments: JSON.stringify({
+                goal: "Explain tests and plan  a cafe\u0301. Also explain ΟΣ and STRASSE.",
+                completionCriteria: ["The explanation is complete."],
+                plan: ["Explain the test structure."],
+                excludedRequests: ["PLAN A CAFÉ.", "ος", "straße"],
+              }),
+            },
+          },
+        ],
+      },
+      { content: "The software-engineering portion is complete.", toolCalls: [] },
+    ],
+    false,
+  );
+
+  assert.equal(
+    await new AgentLoop(provider, await ToolExecutor.create(root, true)).run("Explain tests."),
+    "The software-engineering portion is complete.",
+  );
+  assert.equal(
+    provider.messages[1]?.find((message) => message.role === "user")?.content,
+    "Explain tests and [excluded request omitted] Also explain [excluded request omitted] and [excluded request omitted].",
+  );
+});
+void test("sanitizes bounded large contracts with all exclusions", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const excludedRequests = [
+    "unrelated request alpha",
+    "unrelated request beta",
+    "unrelated request gamma",
+    "unrelated request delta",
+    "unrelated request epsilon",
+    "unrelated request zeta",
+    "unrelated request eta",
+    "unrelated request theta",
+  ];
+  const repeatedContext = "engineering context ".repeat(12);
+  const provider = new MockProvider(
+    [
+      {
+        toolCalls: [
+          {
+            id: "task-large",
+            function: {
+              name: "declare_task",
+              arguments: JSON.stringify({
+                goal: `${repeatedContext} ${excludedRequests.join(" and ")} ${repeatedContext}`.slice(
+                  0,
+                  500,
+                ),
+                completionCriteria: Array.from(
+                  { length: 8 },
+                  (_, index) =>
+                    `${repeatedContext}criterion ${index} ${excludedRequests[index] ?? ""}`,
+                ),
+                plan: Array.from(
+                  { length: 8 },
+                  (_, index) => `${repeatedContext}step ${index} ${excludedRequests[index] ?? ""}`,
+                ),
+                excludedRequests,
+              }),
+            },
+          },
+        ],
+      },
+      { content: "The bounded contract was sanitized.", toolCalls: [] },
+    ],
+    false,
+  );
+
+  await new AgentLoop(provider, await ToolExecutor.create(root, true)).run("Complete the task.");
+
+  const executionMessages = provider.messages[1] ?? [];
+  const serializedExecutionMessages = JSON.stringify(executionMessages);
+  for (const excludedRequest of excludedRequests)
+    assert.equal(serializedExecutionMessages.includes(excludedRequest), false);
+  assert.ok(serializedExecutionMessages.includes("[excluded request omitted]"));
+});
+void test("redirects fully unrelated requests before memory or workspace access", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const events: AgentEvent[] = [];
+  const provider = new MockProvider([{ toolCalls: [scopeRedirectCall()] }], false);
+
+  const result = await new AgentLoop(provider, await ToolExecutor.create(root, true), 12, (event) =>
+    events.push(event),
+  ).run("What is the weather?");
+
+  assert.equal(
+    result,
+    "I can help with software-engineering work, but not with this request. This is not software-engineering work. You can ask instead: Ask how to test a TypeScript function.",
+  );
+  assert.deepEqual(
+    events.filter((event) => event.type === "scope_redirected"),
+    [
+      {
+        type: "scope_redirected",
+        reason: "This is not software-engineering work.",
+        suggestedRequest: "Ask how to test a TypeScript function.",
+      },
+    ],
+  );
+  assert.equal(
+    events.some((event) => event.type === "task_declared"),
+    false,
+  );
+  assert.equal(
+    events.some((event) => event.type === "tool_proposed"),
+    false,
+  );
+  assert.equal(provider.messages.length, 1);
+});
+void test("compacts consecutive redirects while preserving the latest redirect context", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const provider = new MockProvider(
+    Array.from({ length: 12 }, () => ({ toolCalls: [scopeRedirectCall()] })),
+    false,
+  );
+  const loop = new AgentLoop(provider, await ToolExecutor.create(root, true));
+
+  for (let index = 0; index < 12; index += 1) {
+    assert.match(await loop.run(`Unrelated request ${index}`), /not software-engineering work/);
+  }
+
+  assert.ok(provider.messages.every((messages) => messages.length <= 32));
+});
+void test("reserves history for a routing retry after repeated redirects", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const provider = new MockProvider(
+    [
+      ...Array.from({ length: 5 }, () => ({ toolCalls: [scopeRedirectCall()] })),
+      {
+        toolCalls: Array.from({ length: 11 }, (_, index) => ({
+          id: `invalid-route-${index}`,
+          function: { name: "declare_task", arguments: '{"goal":"Explain tests."}' },
+        })),
+      },
+      { toolCalls: [taskDeclarationCall()] },
+      { content: "The retry succeeded.", toolCalls: [] },
+    ],
+    false,
+  );
+  const loop = new AgentLoop(provider, await ToolExecutor.create(root, true));
+
+  for (let index = 0; index < 5; index += 1) {
+    await loop.run(`Unrelated request ${index}`);
+  }
+
+  assert.equal(await loop.run("Explain tests."), "The retry succeeded.");
+});
+void test("preserves Gemini redirect context for a follow-up submission", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const model = modelCatalog.find((entry) => entry.protocol === "gemini");
+  assert.ok(model);
+  const requestBodies: string[] = [];
+  const provider = new ModelProvider({ model, apiKey: "test-key" }, (_input, init) => {
+    if (typeof init?.body !== "string") throw new Error("Expected a string request body.");
+    requestBodies.push(init.body);
+    switch (requestBodies.length) {
+      case 1:
+        return Promise.resolve(
+          Response.json({
+            id: "redirect-interaction",
+            steps: [
+              {
+                type: "function_call",
+                id: "redirect-1",
+                name: "redirect_scope",
+                arguments: {
+                  reason: "This is not software-engineering work.",
+                  suggestedRequest: "Ask how to test a TypeScript function.",
+                },
+              },
+            ],
+          }),
+        );
+      case 2:
+        return Promise.resolve(
+          Response.json({
+            id: "invalid-task-interaction",
+            steps: [
+              {
+                type: "function_call",
+                id: "invalid-task-1",
+                name: "declare_task",
+                arguments: {
+                  goal: "Explain TypeScript testing.",
+                },
+              },
+            ],
+          }),
+        );
+      case 3:
+        return Promise.resolve(
+          Response.json({
+            id: "task-interaction",
+            steps: [
+              {
+                type: "function_call",
+                id: "task-1",
+                name: "declare_task",
+                arguments: {
+                  goal: "Explain TypeScript testing.",
+                  completionCriteria: ["The testing approach is explained."],
+                  plan: ["Describe a focused test structure."],
+                  excludedRequests: [],
+                },
+              },
+            ],
+          }),
+        );
+      default:
+        return Promise.resolve(
+          Response.json({
+            id: "execution-interaction",
+            steps: [{ type: "model_output", content: [{ type: "text", text: "Done." }] }],
+          }),
+        );
+    }
+  });
+  const loop = new AgentLoop(provider, await ToolExecutor.create(root, true));
+
+  assert.match(await loop.run("What is the weather?"), /not software-engineering work/);
+  assert.equal(await loop.run("Why?"), "Done.");
+
+  const followUpPayload = JSON.parse(requestBodies[1] ?? "") as {
+    previous_interaction_id?: string;
+    input: Array<{ type: string; content?: string }>;
+  };
+  assert.equal(followUpPayload.previous_interaction_id, "redirect-interaction");
+  assert.deepEqual(followUpPayload.input, [
+    {
+      type: "function_result",
+      name: "redirect_scope",
+      call_id: "redirect-1",
+      result: [
+        {
+          type: "text",
+          text: '{"status":"redirected","reason":"This is not software-engineering work.","suggestedRequest":"Ask how to test a TypeScript function."}',
+        },
+      ],
+    },
+    { type: "user_input", content: "Why?" },
+  ]);
+  const retryPayload = JSON.parse(requestBodies[2] ?? "") as {
+    input: Array<{ type: string; name?: string; call_id?: string }>;
+  };
+  assert.equal(
+    retryPayload.input.some(
+      (item) => item.type === "function_result" && item.name === "redirect_scope",
+    ),
+    false,
+  );
+  const retryFunctionResult = retryPayload.input.find((item) => item.type === "function_result");
+  assert.ok(retryFunctionResult);
+  assert.equal(retryFunctionResult.name, "declare_task");
+  assert.equal(retryFunctionResult.call_id, "invalid-task-1");
 });
 void test("revises the plan with evidence before the next workspace action", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
@@ -255,7 +595,7 @@ void test("retries a missing task declaration with protocol-safe feedback", asyn
     provider.messages[1]?.some(
       (message) =>
         message.role === "user" &&
-        message.content?.includes("Task declaration is required before any answer"),
+        message.content?.includes("Scope routing is required before any answer"),
     ),
   );
   assert.equal(provider.acceptedCompletions, 3);
@@ -289,7 +629,7 @@ void test("does not retain retry feedback as the prior user prompt", async (cont
   );
   assert.equal(
     secondDeclarationRequest?.some((message) =>
-      message.content?.includes("Task declaration is required"),
+      message.content?.includes("Scope routing is required"),
     ),
     false,
   );
@@ -312,7 +652,7 @@ void test("counts declaration calls across retry attempts", async (context) => {
 
   await assert.rejects(
     () => new AgentLoop(provider, tools).run("Inspect the project."),
-    /exceeded the maximum number of tool calls during task declaration/,
+    /exceeded the maximum number of tool calls during scope routing/,
   );
   assert.equal(provider.acceptedCompletions, 1);
 });
@@ -322,7 +662,7 @@ void test("abandons failed declaration state before the next submission", async 
   const provider = new FailedDeclarationProvider();
   const loop = new AgentLoop(provider, await ToolExecutor.create(root, true));
 
-  await assert.rejects(() => loop.run("Old task."), /could not declare a valid task contract/);
+  await assert.rejects(() => loop.run("Old task."), /could not route the request/);
   assert.equal(await loop.run("New task."), "Completed.");
 
   const nextDeclarationRequest = provider.messages[2];
@@ -410,10 +750,7 @@ void test("does not execute mixed declaration and workspace calls", async (conte
   const loop = new AgentLoop(provider, await ToolExecutor.create(root, true), 12, (event) =>
     events.push(event),
   );
-  await assert.rejects(
-    () => loop.run("Inspect the project."),
-    /could not declare a valid task contract/,
-  );
+  await assert.rejects(() => loop.run("Inspect the project."), /could not route the request/);
   assert.equal(
     events.some((event) => event.type === "tool_proposed"),
     false,
@@ -447,6 +784,37 @@ void test("rejects a later task declaration without workspace lifecycle events",
     provider.messages[2]?.some(
       (message) =>
         message.role === "tool" && message.content?.includes("immutable for this submission"),
+    ),
+  );
+});
+void test("rejects a later scope redirect without workspace lifecycle events", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const events: AgentEvent[] = [];
+  const provider = new MockProvider(
+    [
+      { toolCalls: [taskDeclarationCall()] },
+      { toolCalls: [scopeRedirectCall()] },
+      { content: "Completed.", toolCalls: [] },
+    ],
+    false,
+  );
+
+  const result = await new AgentLoop(provider, await ToolExecutor.create(root, true), 12, (event) =>
+    events.push(event),
+  ).run("Inspect the project.");
+
+  assert.equal(result, "Completed.");
+  assert.equal(events.filter((event) => event.type === "scope_redirected").length, 0);
+  assert.equal(
+    events.some((event) => event.type === "tool_proposed"),
+    false,
+  );
+  assert.ok(
+    provider.messages[2]?.some(
+      (message) =>
+        message.role === "tool" &&
+        message.content?.includes("scope decision is immutable for this submission"),
     ),
   );
 });
@@ -727,6 +1095,7 @@ void test("does not replay consumed Gemini tool results after history compaction
                   goal: "Inspect the project.",
                   completionCriteria: ["The requested result is returned."],
                   plan: ["Inspect the project.", "Report the result."],
+                  excludedRequests: [],
                 },
               },
             ],
@@ -802,6 +1171,7 @@ void test("preserves session-start context in Gemini declaration input after com
                 goal: "Answer the request.",
                 completionCriteria: ["The requested result is returned."],
                 plan: ["Inspect the project.", "Report the result."],
+                excludedRequests: [],
               },
             },
           ]
@@ -880,7 +1250,7 @@ void test("emits redacted provider-request previews before each completion", asy
     events.push(event),
   ).run("Create HelloWorld.swift.");
 
-  const request = events.find((event) => event.type === "provider_request" && event.toolCount > 1);
+  const request = events.find((event) => event.type === "provider_request" && event.toolCount > 2);
   assert.equal(request?.type, "provider_request");
   if (request?.type === "provider_request") {
     assert.equal(request.round, 0);
@@ -1033,7 +1403,11 @@ class MockProvider implements ChatProvider {
   complete(messages: ChatMessage[], tools: ToolDefinition[]): Promise<AssistantResponse> {
     this.messages.push([...messages]);
     this.requestedTools.push(tools);
-    if (this.autoDeclare && tools.length === 1 && tools[0]?.function.name === "declare_task") {
+    if (
+      this.autoDeclare &&
+      tools.some((tool) => tool.function.name === "declare_task") &&
+      tools.some((tool) => tool.function.name === "redirect_scope")
+    ) {
       return Promise.resolve({
         toolCalls: [
           {
@@ -1044,6 +1418,7 @@ class MockProvider implements ChatProvider {
                 goal: "Complete the requested test task.",
                 completionCriteria: ["The requested result is returned."],
                 plan: ["Inspect the project.", "Report the result."],
+                excludedRequests: [],
               }),
             },
           },
@@ -1075,7 +1450,10 @@ class FailedDeclarationProvider implements ChatProvider {
 
   complete(messages: ChatMessage[], tools: ToolDefinition[]): Promise<AssistantResponse> {
     this.messages.push([...messages]);
-    if (tools.length === 1) {
+    if (
+      tools.some((tool) => tool.function.name === "declare_task") &&
+      tools.some((tool) => tool.function.name === "redirect_scope")
+    ) {
       this.declarationAttempts += 1;
       if (this.declarationAttempts <= 2) {
         return Promise.resolve({
@@ -1108,6 +1486,23 @@ function taskDeclarationCall(suffix = ""): {
         goal: suffix ? `Complete the ${suffix} test task.` : "Complete the requested test task.",
         completionCriteria: ["The requested result is returned."],
         plan: ["Inspect the project.", "Report the result."],
+        excludedRequests: [],
+      }),
+    },
+  };
+}
+
+function scopeRedirectCall(): {
+  id: string;
+  function: { name: string; arguments: string };
+} {
+  return {
+    id: "redirect-1",
+    function: {
+      name: "redirect_scope",
+      arguments: JSON.stringify({
+        reason: "This is not software-engineering work.",
+        suggestedRequest: "Ask how to test a TypeScript function.",
       }),
     },
   };

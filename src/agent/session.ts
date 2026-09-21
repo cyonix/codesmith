@@ -69,6 +69,7 @@ export class AgentSession {
             }),
         })
       : undefined;
+    const memory = this.memory;
     this.loop = new AgentLoop(
       provider,
       tools,
@@ -76,6 +77,12 @@ export class AgentSession {
       (event) => this.emit(event),
       () => this.closed,
       this.memory,
+      memory
+        ? () =>
+            memory.initialize((summary) =>
+              this.requestApproval({ kind: "model_download", summary }),
+            )
+        : undefined,
     );
   }
 
@@ -116,9 +123,6 @@ export class AgentSession {
     this.active = true;
 
     try {
-      await this.memory?.initialize((summary) =>
-        this.requestApproval({ kind: "model_download", summary }),
-      );
       return await this.loop.run(prompt);
     } catch (error) {
       this.emit({

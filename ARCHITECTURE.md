@@ -207,6 +207,7 @@ Google's retention terms before you choose a Gemini model.
 | `status`             | The agent is `thinking`, `waiting_for_approval`, or `complete` |
 | `task_declared`      | A bounded goal, criteria, and ordered plan were accepted       |
 | `plan_revised`       | The complete plan was replaced with a stated reason            |
+| `scope_redirected`   | A fully unrelated request was redirected without tool access   |
 | `assistant_text`     | The final text response from the agent                         |
 | `tool_proposed`      | The model asked to call a tool                                 |
 | `tool_started`       | A local tool is about to run                                   |
@@ -231,20 +232,25 @@ messages, timelines, diff previews, and approval dialogs.
 ## 4. Request lifecycle
 
 1. A client sends a prompt to an `AgentSession`.
-2. The core asks the provider to call `declare_task` with one goal, 1 to 8
-   observable completion criteria, and 1 to 8 ordered plan steps. The
-   declaration is structurally validated, bounded, immutable for the
-   submission, and retried at most once.
-3. After a valid declaration, the core emits `task_declared` and retrieves
-   bounded episodic evidence, if enabled.
-4. The core sends the prompt, declaration result, evidence guard, and
-   workspace tool definitions to the provider.
-5. The model returns text or tool calls. It can use `revise_plan` as a
+2. The core asks the provider for exactly one routing call: `declare_task` for
+   software-engineering work, or `redirect_scope` for a fully unrelated
+   request. The routing call is structurally validated, bounded, and retried
+   at most once.
+3. For a valid task declaration, the core emits `task_declared`, initializes
+   and retrieves bounded episodic evidence if enabled, and exposes workspace
+   tools. A mixed request keeps only its software-engineering portion and
+   reports bounded excluded-request metadata.
+4. For a valid scope redirect, the core emits `scope_redirected` and returns a
+   bounded response without initializing episodic memory, exposing workspace
+   tools, or requesting approval.
+5. For a task, the core sends the prompt, declaration result, evidence guard,
+   and workspace tool definitions to the provider.
+6. The model returns text or tool calls. It can use `revise_plan` as a
    model-only call when evidence changes the approach.
-6. The loop can run a batch of read-only file or Git inspection calls, but it
+7. The loop can run a batch of read-only file or Git inspection calls, but it
    rejects more than one side-effecting workspace call in one response.
-7. The sandboxed executor runs approved tool calls on the local machine.
-8. The tool results return to the model until it gives a final response.
+8. The sandboxed executor runs approved tool calls on the local machine.
+9. The tool results return to the model until it gives a final response.
 
 CodeSmith keeps conversation context for the current session. It interprets
 brief replies such as `yes`, `no`, `proceed`, and `do it` using the agent's most
@@ -255,21 +261,26 @@ historical user data, not as a trusted system instruction.
 
 ### Task contracts
 
-Every submission must declare a task contract before workspace tools or
-episodic-memory evidence are available. A contract contains:
+Every in-scope submission must declare a task contract before workspace tools
+or episodic-memory evidence are available. A contract contains:
 
 - A non-empty goal of at most 500 Unicode code points.
 - One to eight unique completion criteria.
 - Criteria of at most 300 Unicode code points each.
 - One to eight unique ordered plan steps.
+- Zero to eight unique excluded unrelated request parts.
+- Excluded request parts of at most 300 Unicode code points each.
 - Plan steps and revision reasons of at most 300 Unicode code points each.
 
 The contract receives an immutable task ID. Its goal and completion criteria
 remain fixed for the submission, while `revise_plan` can replace the complete
-plan with a bounded reason. Clients receive the initial contract through
-`task_declared` and revisions through `plan_revised`; the CLI presents both
-without treating planning as an approval boundary. Debug logs include the task
-ID, goal, criteria, plan, and revision reason through the shared
+plan with a bounded reason. Fully unrelated requests use a separate bounded
+`redirect_scope` call with a reason and a suggested software-engineering
+request. Clients receive the initial contract through `task_declared`,
+exclusions through the contract, and redirects through `scope_redirected`;
+the CLI presents these decisions without treating routing or planning as an
+approval boundary. Debug logs include the task ID, goal, criteria, plan,
+exclusions, redirect reason, and suggestion through the shared
 credential-redaction and bounded-preview path.
 
 ### Episodic memory
@@ -331,8 +342,10 @@ CodeSmith follows these principles when it runs an agent loop.
       and searches report pagination or truncation. Treat partial, stale,
       missing, or conflicting evidence as incomplete, state the uncertainty, and
       request the exact missing input instead of guessing.
-- [ ] **Task-scope discipline:** Focus on the selected project and
-      software-engineering work. Politely redirect unrelated requests.
+- [x] **Task-scope discipline:** Focus on software-engineering work. Allow
+      general software-engineering questions, narrow mixed requests to their
+      engineering portion, and politely redirect fully unrelated requests
+      before memory or workspace access.
 - [ ] **Episodic tool-execution memory:**
   - [x] Record and retrieve relevant tool actions, results, failures, and decisions.
   - [ ] Bound, summarize, and remove that history when it no longer applies.
@@ -363,6 +376,12 @@ The model can request these local operations:
 - Apply an exact, unique text replacement to an existing UTF-8 file.
 - Inspect `git status --short` and hardened `git diff`.
 - Run an exact command from the selected project's profile.
+
+Before these workspace tools are available, the model must route the request
+as software-engineering work or use `redirect_scope` for a fully unrelated
+request. Mixed requests must list their excluded unrelated portions in the
+task contract. Scope routing does not replace approval for edits, Git
+inspection, commands, or model downloads.
 
 CodeSmith asks for approval before every edit, Git operation, and command. It
 does not ask when you use `--yes` or set `autoApprove: true`.
@@ -470,7 +489,7 @@ staged files.
 | Repository          | `cyonix/codesmith`                                             |
 | Runtime             | Node.js 22+ and TypeScript                                     |
 | Architecture status | Experimental learning project; not intended for production use |
-| Last updated        | 2026-08-15                                                     |
+| Last updated        | 2026-09-20                                                     |
 
 ## 11. Glossary
 

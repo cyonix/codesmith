@@ -8,6 +8,7 @@ void test("exports TaskContract through Agent Core", () => {
     goal: "Inspect the project.",
     completionCriteria: ["The result is reported."],
     plan: ["Inspect the project.", "Report the result."],
+    excludedRequests: [],
   };
 
   assert.equal(contract.goal, "Inspect the project.");

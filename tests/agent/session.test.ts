@@ -104,13 +104,62 @@ void test("auto-approval still requires explicit model-download approval", async
 
   const submission = session.submit("Inspect the project.");
 
+  await new Promise<void>((resolve) => setImmediate(resolve));
   assert.deepEqual(
     approvals.map((approval) => approval.kind),
     ["model_download"],
   );
-  assert.equal(provider.calls, 0);
+  assert.equal(provider.calls, 1);
   assert.equal(session.approve(approvals[0].requestId, true), true);
   assert.equal(await submission, "Completed.");
+});
+
+void test("redirects unrelated requests without initializing episodic memory", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const provider = new MockProvider(
+    [
+      {
+        toolCalls: [
+          {
+            id: "redirect-1",
+            function: {
+              name: "redirect_scope",
+              arguments: JSON.stringify({
+                reason: "This is not software-engineering work.",
+                suggestedRequest: "Ask how to test a TypeScript function.",
+              }),
+            },
+          },
+        ],
+      },
+    ],
+    false,
+  );
+  let installCalls = 0;
+  const session = await AgentSession.create(
+    { projectRoot: root, provider, semanticMemory: true },
+    {
+      createMemory: (configuration, eventSink) =>
+        new EpisodicMemory(
+          configuration,
+          eventSink,
+          { create: () => Promise.resolve({ embed: () => Promise.resolve([1, 0]) }) },
+          {
+            install() {
+              installCalls += 1;
+              return Promise.resolve("/fake-model");
+            },
+          },
+        ),
+    },
+  );
+
+  const result = await session.submit("What is the weather?");
+
+  assert.match(result, /not with this request/);
+  assert.equal(installCalls, 0);
+  assert.equal(provider.calls, 1);
 });
 
 void test("closed sessions reject new prompts", async (context) => {
@@ -180,11 +229,18 @@ class MockProvider implements ChatProvider {
   private index = 0;
   calls = 0;
 
-  constructor(private readonly responses: AssistantResponse[]) {}
+  constructor(
+    private readonly responses: AssistantResponse[],
+    private readonly autoDeclare = true,
+  ) {}
 
   complete(_messages: unknown[], tools: ToolDefinition[]): Promise<AssistantResponse> {
     this.calls += 1;
-    if (tools.length === 1 && tools[0]?.function.name === "declare_task") {
+    if (
+      this.autoDeclare &&
+      tools.some((tool) => tool.function.name === "declare_task") &&
+      tools.some((tool) => tool.function.name === "redirect_scope")
+    ) {
       return Promise.resolve({
         toolCalls: [
           {
@@ -195,6 +251,7 @@ class MockProvider implements ChatProvider {
                 goal: "Complete the requested test task.",
                 completionCriteria: ["The requested result is returned."],
                 plan: ["Inspect the project.", "Report the result."],
+                excludedRequests: [],
               }),
             },
           },

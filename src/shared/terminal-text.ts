@@ -20,3 +20,7 @@ export function escapeTerminalText(value: string): string {
     })
     .join("");
 }
+
+export function escapeTerminalTextPreservingNewlines(value: string): string {
+  return value.replaceAll("\r\n", "\n").split("\n").map(escapeTerminalText).join("\n");
+}

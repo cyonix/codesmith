@@ -19,12 +19,21 @@ approves them.
 CodeSmith provides Agent Core without a user interface. You can use it from a
 CLI, desktop client, or web client. The `codesmith` command uses Agent Core.
 
-Before a submission can use workspace tools, CodeSmith declares a bounded task
-contract with the goal, observable completion criteria, and an ordered plan.
-Agent Core clients receive this contract through the `task_declared` event and
-can show it in their own interface. The model can replace the full plan through
-the `plan_revised` event when new evidence changes the approach. The CLI
-displays the contract and plan without treating them as approval prompts.
+Before a submission can use workspace tools, CodeSmith routes it as
+software-engineering work. General software-engineering questions are in
+scope, even when they do not concern the selected project. A mixed request is
+narrowed to its software-engineering portion and reports the unrelated parts
+that were excluded. A fully unrelated request receives a polite
+`scope_redirected` response without workspace access or episodic-memory
+initialization.
+
+For an in-scope submission, CodeSmith declares a bounded task contract with the
+goal, observable completion criteria, ordered plan, and any excluded request
+parts. Agent Core clients receive this contract through the `task_declared`
+event and can show it in their own interface. The model can replace the full
+plan through the `plan_revised` event when new evidence changes the approach.
+The CLI displays the contract and plan without treating them as approval
+prompts.
 
 Execution uses the current submission, its task contract, plan revisions, fresh
 tool results, and optional bounded episodic evidence marked as untrusted

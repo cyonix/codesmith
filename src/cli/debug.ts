@@ -14,8 +14,15 @@ export function formatDebugEvent(event: AgentEvent): string {
       const redactedPlan = event.contract.plan.map(
         (step, index) => `${index + 1}. ${redactSensitiveText(step)}`,
       );
+      const excludedRequests = event.contract.excludedRequests ?? [];
+      const redactedExclusions =
+        excludedRequests.length > 0
+          ? ` exclusions=${excludedRequests
+              .map((request, index) => `${index + 1}. ${redactSensitiveText(request)}`)
+              .join(" | ")}`
+          : "";
       const contractPreview = truncatePreview(
-        `goal=${redactedGoal} criteria=${redactedCriteria.join(" | ")} plan=${redactedPlan.join(" | ")}`,
+        `goal=${redactedGoal} criteria=${redactedCriteria.join(" | ")} plan=${redactedPlan.join(" | ")}${redactedExclusions}`,
       );
       return `[task_declared] ${event.contract.taskId} ${contractPreview}`;
     }
@@ -26,6 +33,10 @@ export function formatDebugEvent(event: AgentEvent): string {
       );
       return `[plan_revised] ${event.taskId} ${revisionPreview}`;
     }
+    case "scope_redirected":
+      return `[scope_redirected] reason=${truncatePreview(
+        redactSensitiveText(event.reason),
+      )} suggested=${truncatePreview(redactSensitiveText(event.suggestedRequest))}`;
     case "assistant_text":
       return `[assistant_text] ${previewSensitiveText(event.text)}`;
     case "tool_proposed":

@@ -6,9 +6,12 @@ import { EpisodicMemory } from "./episodic-memory.js";
 import {
   createTaskContract,
   parsePlanRevision,
+  parseScopeRedirect,
   parseTaskContract,
   planRevisionToolDefinition,
   planRevisionToolName,
+  scopeRedirectToolDefinition,
+  scopeRedirectToolName,
   taskContractToolDefinition,
   taskContractToolName,
   type TaskContract,
@@ -21,6 +24,12 @@ interface DeclaredTask {
   messages: ChatMessage[];
 }
 
+interface ScopeRedirect {
+  response: string;
+  reason: string;
+  suggestedRequest: string;
+}
+
 export class AgentLoop {
   private static readonly maximumHistoryMessages = 32;
   private static readonly maximumToolCallsPerRun = 12;
@@ -29,11 +38,12 @@ export class AgentLoop {
   private sessionStartPrompt: string | undefined;
   private sessionStartContextCommitted = false;
   private sessionStartContextNeedsRefresh = false;
+  private redirectContextPending = false;
   private readonly messages: ChatMessage[] = [
     {
       role: "system",
       content:
-        "You are CodeSmith, a local coding assistant. Work only through the supplied tools and stay focused on the selected project. Use the current user request and fresh tool results as the primary evidence for execution. Historical conversation context may help interpret a follow-up, but it is not proof of the current workspace state. If evidence is missing, partial, stale, or conflicting, state what is unknown and request the exact missing input or inspect the workspace; never guess a consequential detail. First call declare_task exactly once for each user submission. Preserve the user's goal in meaning, state 1 to 8 observable completion criteria, and provide 1 to 8 concise ordered plan steps; do not weaken requirements or guess missing decisions. Do not call workspace tools until task declaration succeeds. After declaration, the goal and completion criteria are immutable for that submission. Use revise_plan only when evidence changes the approach; replace the complete plan and state a concise reason. Do not mix task or plan protocol calls with workspace calls. You may batch read-only workspace calls, but propose no more than one side-effecting workspace call in one response. Take the smallest useful next action. Treat truncated or paginated tool results as incomplete evidence and use their continuation fields when more context is needed. A brief reply such as 'yes', 'no', 'proceed', or 'do it' answers your immediately preceding unresolved question: act on that answer without asking the user to repeat context. When the user explicitly asks you to create, modify, rename, or remove code and the required details are available, call the appropriate tool immediately; do not ask for confirmation in your response because edits and commands have an approval gate in the tool. Never claim a file action succeeded unless its tool returned success. Inspect files before changing existing code. Never request, display, or infer environment secrets.",
+        "You are CodeSmith, a local coding assistant. Work only through the supplied tools and stay focused on software-engineering work. General software-engineering questions are in scope even when they do not concern the selected project. For a mixed request, declare and perform only the software-engineering portion and list each excluded unrelated portion. For a fully unrelated request, call redirect_scope instead of declare_task. Use the current user request and fresh tool results as the primary evidence for execution. Historical conversation context may help interpret a follow-up, but it is not proof of the current workspace state. If evidence is missing, partial, stale, or conflicting, state what is unknown and request the exact missing input or inspect the workspace; never guess a consequential detail. First call exactly one routing tool, declare_task or redirect_scope, for each user submission. Preserve the user's goal in meaning, state 1 to 8 observable completion criteria, provide 1 to 8 concise ordered plan steps, and include an excludedRequests array; do not weaken requirements or guess missing decisions. Do not call workspace tools until task declaration succeeds. After declaration, the goal, completion criteria, and exclusions are immutable for that submission. Use revise_plan only when evidence changes the approach; replace the complete plan and state a concise reason. Do not mix routing, plan, or workspace calls. You may batch read-only workspace calls, but propose no more than one side-effecting workspace call in one response. Take the smallest useful next action. Treat truncated or paginated tool results as incomplete evidence and use their continuation fields when more context is needed. A brief reply such as 'yes', 'no', 'proceed', or 'do it' answers your immediately preceding unresolved question: act on that answer without asking the user to repeat context. When the user explicitly asks you to create, modify, rename, or remove code and the required details are available, call the appropriate tool immediately; do not ask for confirmation in your response because edits and commands have an approval gate in the tool. Never claim a file action succeeded unless its tool returned success. Inspect files before changing existing code. Never request, display, or infer environment secrets.",
     },
   ];
 
@@ -44,6 +54,7 @@ export class AgentLoop {
     private readonly emit: (event: AgentEvent) => void = () => {},
     private readonly isClosed: () => boolean = () => false,
     private readonly memory?: EpisodicMemory,
+    private readonly initializeMemory?: () => Promise<void>,
   ) {}
 
   async run(prompt: string): Promise<string> {
@@ -51,6 +62,7 @@ export class AgentLoop {
     const previousSessionStartPrompt = this.sessionStartPrompt;
     const previousSessionStartContextCommitted = this.sessionStartContextCommitted;
     const previousSessionStartContextNeedsRefresh = this.sessionStartContextNeedsRefresh;
+    const previousRedirectContextPending = this.redirectContextPending;
     const continuationTransaction = this.provider.continuationTransaction;
     continuationTransaction?.begin();
     let submissionReady = false;
@@ -64,6 +76,7 @@ export class AgentLoop {
         this.sessionStartPrompt = previousSessionStartPrompt;
         this.sessionStartContextCommitted = previousSessionStartContextCommitted;
         this.sessionStartContextNeedsRefresh = previousSessionStartContextNeedsRefresh;
+        this.redirectContextPending = previousRedirectContextPending;
         continuationTransaction?.rollback();
       }
       throw error;
@@ -72,16 +85,38 @@ export class AgentLoop {
 
   private async runSubmission(prompt: string, markReady: () => void): Promise<string> {
     this.trimHistory();
+    this.redirectContextPending = false;
     const priorAssistantText = this.priorAssistantText();
     this.messages.push({ role: "user", content: prompt });
-    const declaredTask = await this.declareTask();
-    const contract = declaredTask.contract;
+    const route = await this.routeSubmission();
 
+    if ("response" in route) {
+      if (this.sessionStartPrompt === undefined) this.sessionStartPrompt = prompt;
+      this.provider.continuationTransaction?.commit();
+      markReady();
+      this.messages.push({ role: "assistant", content: route.response });
+      this.redirectContextPending = true;
+      this.emit({
+        type: "scope_redirected",
+        reason: route.reason,
+        suggestedRequest: route.suggestedRequest,
+      });
+      this.emit({ type: "assistant_text", text: route.response });
+      this.emit({ type: "status", phase: "complete" });
+      return route.response;
+    }
+
+    const contract = route.contract;
+    const excludedRequests = contract.excludedRequests ?? [];
+    const executionPrompt =
+      excludedRequests.length > 0 ? sanitizeExcludedText(contract.goal, excludedRequests) : prompt;
+
+    await this.initializeMemory?.();
     const memoryContext = this.memory
       ? await this.memory.retrieve(
           priorAssistantText
-            ? `${prompt}\n\nPrevious assistant answer:\n${priorAssistantText}`
-            : prompt,
+            ? `${executionPrompt}\n\nPrevious assistant answer:\n${priorAssistantText}`
+            : executionPrompt,
         )
       : undefined;
     this.memory?.startSubmission();
@@ -98,8 +133,8 @@ export class AgentLoop {
     let activePlan: readonly string[] | undefined;
     const executionMessages: ChatMessage[] = [
       this.messages[0] ?? { role: "system", content: "" },
-      { role: "user", content: prompt },
-      ...declaredTask.messages,
+      { role: "user", content: executionPrompt },
+      ...sanitizeExecutionMessages(route.messages, contract),
     ];
 
     while (true) {
@@ -169,20 +204,46 @@ export class AgentLoop {
       const planRevisionCalls = toolCalls.filter(
         (call) => call.function.name === planRevisionToolName,
       );
+      const scopeRedirectCalls = toolCalls.filter(
+        (call) => call.function.name === scopeRedirectToolName,
+      );
       const workspaceCalls = toolCalls.filter(
         (call) =>
           call.function.name !== taskContractToolName &&
-          call.function.name !== planRevisionToolName,
+          call.function.name !== planRevisionToolName &&
+          call.function.name !== scopeRedirectToolName,
       );
-      if ((hasTaskDeclaration || planRevisionCalls.length > 0) && workspaceCalls.length > 0) {
+      if (
+        (hasTaskDeclaration || planRevisionCalls.length > 0 || scopeRedirectCalls.length > 0) &&
+        workspaceCalls.length > 0
+      ) {
         for (const call of toolCalls) {
           const toolResult: ChatMessage = {
             role: "tool",
             content: JSON.stringify({
               error: hasTaskDeclaration
                 ? "A response cannot mix declare_task with workspace tools. Retry without workspace calls."
-                : "A response cannot mix revise_plan with workspace tools. Retry with the plan revision alone.",
+                : planRevisionCalls.length > 0
+                  ? "A response cannot mix revise_plan with workspace tools. Retry with the plan revision alone."
+                  : "A response cannot mix redirect_scope with workspace tools. Retry with the scope decision alone.",
             }),
+            tool_call_id: call.id,
+          };
+          this.messages.push(toolResult);
+          executionMessages.push(toolResult);
+        }
+        continue;
+      }
+
+      if (scopeRedirectCalls.length > 0) {
+        const error =
+          scopeRedirectCalls.length !== 1 || toolCalls.length !== 1
+            ? "A scope redirect must be the only tool call in the initial routing response."
+            : "The scope decision is immutable for this submission. Do not call redirect_scope again.";
+        for (const call of toolCalls) {
+          const toolResult: ChatMessage = {
+            role: "tool",
+            content: JSON.stringify({ error }),
             tool_call_id: call.id,
           };
           this.messages.push(toolResult);
@@ -293,44 +354,46 @@ export class AgentLoop {
     }
   }
 
-  private async declareTask(): Promise<DeclaredTask> {
-    let lastError = "The provider did not call declare_task.";
-    let declarationCallsUsed = 0;
+  private async routeSubmission(): Promise<DeclaredTask | ScopeRedirect> {
+    let lastError = "The provider did not call a routing tool.";
+    let routingCallsUsed = 0;
 
     for (let attempt = 0; attempt < AgentLoop.maximumTaskDeclarationAttempts; attempt += 1) {
       this.assertOpen();
       this.emit({ type: "status", phase: "thinking" });
       this.assertOpen();
       const providerMessages = this.messagesWithSessionStartContext();
-      this.emit(providerRequestEvent(0, providerMessages, 1));
+      const routingTools = [taskContractToolDefinition, scopeRedirectToolDefinition];
+      this.emit(providerRequestEvent(0, providerMessages, routingTools.length));
       this.assertOpen();
 
-      const response = await this.provider.complete(providerMessages, [taskContractToolDefinition]);
+      const response = await this.provider.complete(providerMessages, routingTools);
       this.assertOpen();
       const responseContent = normalizeAssistantText(response.content);
 
-      const declarationCalls = response.toolCalls.map((call, index) =>
-        normalizeToolCall(call, index),
-      );
-      declarationCallsUsed += declarationCalls.length;
-      if (declarationCallsUsed > AgentLoop.maximumToolCallsPerRun) {
+      const routingCalls = response.toolCalls.map((call, index) => normalizeToolCall(call, index));
+      routingCallsUsed += routingCalls.length;
+      if (routingCallsUsed > AgentLoop.maximumToolCallsPerRun) {
         throw new CodeSmithError(
           "loop",
-          "The agent exceeded the maximum number of tool calls during task declaration.",
+          "The agent exceeded the maximum number of tool calls during scope routing.",
         );
       }
-      const declarationCall =
-        declarationCalls.length === 1 && declarationCalls[0]?.function.name === taskContractToolName
-          ? declarationCalls[0]
+
+      const routingCall =
+        routingCalls.length === 1 &&
+        (routingCalls[0]?.function.name === taskContractToolName ||
+          routingCalls[0]?.function.name === scopeRedirectToolName)
+          ? routingCalls[0]
           : undefined;
-      if (declarationCall) {
-        const parsed = parseTaskContract(declarationCall.function.arguments);
+      if (routingCall?.function.name === taskContractToolName) {
+        const parsed = parseTaskContract(routingCall.function.arguments);
         if (parsed.valid) {
           this.assertHistoryCapacity(2);
           this.messages.push({
             role: "assistant",
             content: responseContent,
-            tool_calls: declarationCalls,
+            tool_calls: routingCalls,
           });
           this.acceptDeclarationCompletion(providerMessages);
           const contract = createTaskContract(parsed.input);
@@ -342,8 +405,9 @@ export class AgentLoop {
               goal: contract.goal,
               completionCriteria: contract.completionCriteria,
               plan: contract.plan,
+              excludedRequests: contract.excludedRequests ?? [],
             }),
-            tool_call_id: declarationCall.id,
+            tool_call_id: routingCall.id,
           };
           this.messages.push(declarationResult);
           this.emit({ type: "task_declared", contract });
@@ -353,16 +417,47 @@ export class AgentLoop {
               {
                 role: "assistant",
                 content: null,
-                tool_calls: declarationCalls,
+                tool_calls: routingCalls,
               },
               declarationResult,
             ],
           };
         }
         lastError = parsed.message;
+      } else if (routingCall?.function.name === scopeRedirectToolName) {
+        const parsed = parseScopeRedirect(routingCall.function.arguments);
+        if (parsed.valid) {
+          this.assertHistoryCapacity(2);
+          this.messages.push({
+            role: "assistant",
+            content: responseContent,
+            tool_calls: routingCalls,
+          });
+          this.acceptDeclarationCompletion(providerMessages);
+          const response = scopeRedirectResponse(
+            parsed.input.reason,
+            parsed.input.suggestedRequest,
+          );
+          const redirectResult: ChatMessage = {
+            role: "tool",
+            content: JSON.stringify({
+              status: "redirected",
+              reason: parsed.input.reason,
+              suggestedRequest: parsed.input.suggestedRequest,
+            }),
+            tool_call_id: routingCall.id,
+          };
+          this.messages.push(redirectResult);
+          return {
+            response,
+            reason: parsed.input.reason,
+            suggestedRequest: parsed.input.suggestedRequest,
+          };
+        }
+        lastError = parsed.message;
       } else {
         lastError =
-          "The first completion must contain exactly one declare_task call and no workspace tool calls.";
+          "The first completion must contain exactly one declare_task or redirect_scope call and no other tool calls.";
       }
 
       /*
@@ -371,17 +466,17 @@ export class AgentLoop {
        */
       if (attempt === AgentLoop.maximumTaskDeclarationAttempts - 1) break;
 
-      const additionalMessages = declarationCalls.length ? 1 + declarationCalls.length : 2;
+      const additionalMessages = routingCalls.length ? 1 + routingCalls.length : 2;
       this.assertHistoryCapacity(additionalMessages);
       this.messages.push({
         role: "assistant",
         content: responseContent,
-        tool_calls: declarationCalls,
+        tool_calls: routingCalls,
       });
       this.acceptDeclarationCompletion(providerMessages);
 
-      if (declarationCalls.length > 0) {
-        for (const call of declarationCalls) {
+      if (routingCalls.length > 0) {
+        for (const call of routingCalls) {
           this.messages.push({
             role: "tool",
             content: JSON.stringify({ error: lastError }),
@@ -392,7 +487,7 @@ export class AgentLoop {
         const retryFeedback: ChatMessage = {
           role: "user",
           content:
-            "Task declaration is required before any answer or workspace action. Call declare_task exactly once with a goal, 1 to 8 observable completion criteria, and 1 to 8 ordered plan steps.",
+            "Scope routing is required before any answer or workspace action. Call exactly one of declare_task or redirect_scope. Use declare_task for software-engineering work, including general questions, and include an excludedRequests array; use redirect_scope only for fully unrelated requests.",
         };
         this.retryFeedbackMessages.add(retryFeedback);
         this.messages.push(retryFeedback);
@@ -401,7 +496,7 @@ export class AgentLoop {
 
     throw new CodeSmithError(
       "loop",
-      `The agent could not declare a valid task contract after ${AgentLoop.maximumTaskDeclarationAttempts} attempts. ${lastError}`,
+      `The agent could not route the request after ${AgentLoop.maximumTaskDeclarationAttempts} attempts. ${lastError}`,
     );
   }
 
@@ -485,6 +580,10 @@ export class AgentLoop {
   }
 
   private trimHistory(): void {
+    if (this.redirectContextPending) {
+      this.trimPendingRedirectHistory();
+      return;
+    }
     const maximumPriorMessages =
       AgentLoop.maximumHistoryMessages - AgentLoop.maximumToolCallsPerRun * 2 - 4;
 
@@ -499,6 +598,57 @@ export class AgentLoop {
       }
       this.messages.splice(1, nextUser - 1);
     }
+  }
+
+  private trimPendingRedirectHistory(): void {
+    const maximumRoutingRetryMessages = AgentLoop.maximumToolCallsPerRun + 3;
+    if (this.messages.length <= AgentLoop.maximumHistoryMessages - maximumRoutingRetryMessages)
+      return;
+
+    let redirectAssistantIndex = -1;
+    for (let index = this.messages.length - 1; index >= 1; index -= 1) {
+      const message = this.messages[index];
+      if (
+        message?.role === "assistant" &&
+        message.tool_calls?.some((call) => call.function.name === scopeRedirectToolName)
+      ) {
+        redirectAssistantIndex = index;
+        break;
+      }
+    }
+    if (redirectAssistantIndex < 0) return;
+
+    const redirectAssistant = this.messages[redirectAssistantIndex];
+    const redirectCall = redirectAssistant?.tool_calls?.find(
+      (call) => call.function.name === scopeRedirectToolName,
+    );
+    if (!redirectAssistant || !redirectCall) return;
+
+    const redirectResultIndex = this.messages.findIndex(
+      (message, index) =>
+        index > redirectAssistantIndex &&
+        message.role === "tool" &&
+        message.tool_call_id === redirectCall.id,
+    );
+    if (redirectResultIndex < 0) return;
+
+    const redirectResponse = this.messages.find(
+      (message, index) =>
+        index > redirectResultIndex && message.role === "assistant" && !message.tool_calls?.length,
+    );
+    const redirectUser = [...this.messages]
+      .slice(1, redirectAssistantIndex)
+      .reverse()
+      .find((message) => message.role === "user" && !this.retryFeedbackMessages.has(message));
+    const systemMessage = this.messages[0];
+    const redirectResult = this.messages[redirectResultIndex];
+    if (!systemMessage || !redirectResult) return;
+
+    const compacted = [systemMessage];
+    if (redirectUser) compacted.push(redirectUser);
+    compacted.push(redirectAssistant, redirectResult);
+    if (redirectResponse) compacted.push(redirectResponse);
+    this.messages.splice(0, this.messages.length, ...compacted);
   }
 
   private compactLatestTurn(): void {
@@ -577,8 +727,181 @@ export class AgentLoop {
   }
 }
 
+function sanitizeExecutionMessages(
+  messages: readonly ChatMessage[],
+  contract: TaskContract,
+): ChatMessage[] {
+  const excludedRequests = contract.excludedRequests ?? [];
+  if (excludedRequests.length === 0) return [...messages];
+
+  const assistantMessage = messages.find(
+    (message) =>
+      message.role === "assistant" &&
+      message.tool_calls?.some((call) => call.function.name === taskContractToolName),
+  );
+  const declarationCall = assistantMessage?.tool_calls?.find(
+    (call) => call.function.name === taskContractToolName,
+  );
+  if (!assistantMessage || !declarationCall) {
+    throw new CodeSmithError("loop", "The task declaration execution context is incomplete.");
+  }
+
+  const sanitize = createExcludedTextSanitizer(excludedRequests);
+  const sanitizedGoal = sanitize(contract.goal);
+  const sanitizedCompletionCriteria = contract.completionCriteria.map(sanitize);
+  const sanitizedPlan = contract.plan.map(sanitize);
+  const declarationArguments = JSON.stringify({
+    goal: sanitizedGoal,
+    completionCriteria: sanitizedCompletionCriteria,
+    plan: sanitizedPlan,
+    excludedRequests: [],
+  });
+  const declarationResult = JSON.stringify({
+    status: "declared",
+    taskId: contract.taskId,
+    goal: sanitizedGoal,
+    completionCriteria: sanitizedCompletionCriteria,
+    plan: sanitizedPlan,
+    excludedRequests: [],
+  });
+
+  return [
+    {
+      ...assistantMessage,
+      content: null,
+      tool_calls: [
+        {
+          ...declarationCall,
+          function: { ...declarationCall.function, arguments: declarationArguments },
+        },
+      ],
+    },
+    {
+      role: "tool",
+      content: declarationResult,
+      tool_call_id: declarationCall.id,
+    },
+  ];
+}
+
+function sanitizeExcludedText(value: string, excludedRequests: readonly string[]): string {
+  return createExcludedTextSanitizer(excludedRequests)(value);
+}
+
+function createExcludedTextSanitizer(
+  excludedRequests: readonly string[],
+): (value: string) => string {
+  const matches = excludedRequests
+    .filter((excludedRequest) => excludedRequest.length > 0)
+    .map((excludedRequest) => {
+      const normalized = normalizeExcludedText(excludedRequest);
+      return { normalized, searchKey: foldExcludedText(normalized) };
+    })
+    .sort((left, right) => right.normalized.length - left.normalized.length);
+  return (value: string): string => {
+    const segments = [
+      ...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(value),
+    ].map(({ segment }) => segment);
+    const normalizedSegments: string[] = [];
+    const searchSegments: string[] = [];
+    let previousWasWhitespace = false;
+    for (const segment of segments) {
+      let normalized = normalizeExcludedText(segment);
+      if (previousWasWhitespace && normalized === " ") normalized = "";
+      previousWasWhitespace = normalized === " " || (previousWasWhitespace && normalized === "");
+      normalizedSegments.push(normalized);
+      searchSegments.push(foldExcludedText(normalized));
+    }
+    const searchText = searchSegments.join("");
+    const searchOffsets = [0];
+    let searchOffset = 0;
+    for (const searchSegment of searchSegments) {
+      searchOffset += searchSegment.length;
+      searchOffsets.push(searchOffset);
+    }
+    const searchBoundaryIndexes = new Map(searchOffsets.map((offset, index) => [offset, index]));
+
+    let sanitized = "";
+    for (let index = 0; index < segments.length;) {
+      let matchEnd = -1;
+      for (const { searchKey } of matches) {
+        const searchStart = searchOffsets[index] ?? 0;
+        const searchEnd = searchStart + searchKey.length;
+        const fastMatchEnd = searchBoundaryIndexes.get(searchEnd);
+        if (searchText.startsWith(searchKey, searchStart) && fastMatchEnd !== undefined) {
+          matchEnd = fastMatchEnd;
+          break;
+        }
+      }
+      if (matchEnd < 0) {
+        for (const { normalized, searchKey } of matches) {
+          if (canSkipExcludedCollation(searchSegments[index] ?? "", searchKey)) continue;
+          matchEnd = excludedMatchEnd(normalizedSegments, index, normalized);
+          if (matchEnd >= 0) break;
+        }
+      }
+      if (matchEnd >= 0) {
+        sanitized += "[excluded request omitted]";
+        index = matchEnd;
+      } else {
+        sanitized += segments[index];
+        index += 1;
+      }
+    }
+    return sanitized;
+  };
+}
+
+function excludedMatchEnd(
+  normalizedSegments: readonly string[],
+  start: number,
+  normalizedTarget: string,
+): number {
+  let candidate = "";
+  const maximumEnd = Math.min(
+    normalizedSegments.length,
+    start + Math.max(normalizedTarget.length * 3, normalizedTarget.length + 4),
+  );
+  for (let end = start; end < maximumEnd; end += 1) {
+    candidate += normalizedSegments[end];
+    if (excludedTextCollator.compare(candidate, normalizedTarget) === 0) return end + 1;
+  }
+  return -1;
+}
+
+function normalizeExcludedText(value: string): string {
+  return value.normalize("NFKC").replace(/\s+/gu, " ");
+}
+
+function foldExcludedText(value: string): string {
+  return value.toLocaleLowerCase("und").replaceAll("ß", "ss");
+}
+
+function canSkipExcludedCollation(sourceSegment: string, target: string): boolean {
+  const sourceFirst = [...sourceSegment][0];
+  const targetFirst = [...target][0];
+  return (
+    sourceFirst !== undefined &&
+    targetFirst !== undefined &&
+    sourceFirst !== targetFirst &&
+    sourceFirst.charCodeAt(0) < 128 &&
+    targetFirst.charCodeAt(0) < 128
+  );
+}
+
+const excludedTextCollator = new Intl.Collator("und", {
+  sensitivity: "base",
+  usage: "search",
+});
+
 function sessionStartContextContent(prompt: string): string {
   return `Session-start request:\n${prompt}`;
+}
+
+function scopeRedirectResponse(reason: string, suggestedRequest: string): string {
+  const normalizedReason = reason.replace(/\s+/g, " ").trim();
+  const normalizedSuggestion = suggestedRequest.replace(/\s+/g, " ").trim();
+  return `I can help with software-engineering work, but not with this request. ${normalizedReason} You can ask instead: ${normalizedSuggestion}`;
 }
 
 function providerRequestEvent(
