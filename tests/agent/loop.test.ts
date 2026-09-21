@@ -114,8 +114,10 @@ void test("narrows mixed requests before workspace execution", async (context) =
               name: "declare_task",
               arguments: JSON.stringify({
                 goal: "Explain how to test a TypeScript function.",
-                completionCriteria: ["The testing approach is explained."],
-                plan: ["Describe a focused test structure."],
+                completionCriteria: [
+                  'The testing approach is explained without Plan "a"\\b\nvacation.',
+                ],
+                plan: ['Describe a focused test structure without Plan "a"\\b\nvacation.'],
                 excludedRequests: ['Plan "a"\\b\nvacation.'],
               }),
             },
@@ -197,6 +199,73 @@ void test("redirects fully unrelated requests before memory or workspace access"
     false,
   );
   assert.equal(provider.messages.length, 1);
+});
+void test("preserves Gemini redirect context for a follow-up submission", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const model = modelCatalog.find((entry) => entry.protocol === "gemini");
+  assert.ok(model);
+  const requestBodies: string[] = [];
+  const provider = new ModelProvider({ model, apiKey: "test-key" }, (_input, init) => {
+    if (typeof init?.body !== "string") throw new Error("Expected a string request body.");
+    requestBodies.push(init.body);
+    switch (requestBodies.length) {
+      case 1:
+        return Promise.resolve(
+          Response.json({
+            id: "redirect-interaction",
+            steps: [
+              {
+                type: "function_call",
+                id: "redirect-1",
+                name: "redirect_scope",
+                arguments: {
+                  reason: "This is not software-engineering work.",
+                  suggestedRequest: "Ask how to test a TypeScript function.",
+                },
+              },
+            ],
+          }),
+        );
+      case 2:
+        return Promise.resolve(
+          Response.json({
+            id: "task-interaction",
+            steps: [
+              {
+                type: "function_call",
+                id: "task-1",
+                name: "declare_task",
+                arguments: {
+                  goal: "Explain TypeScript testing.",
+                  completionCriteria: ["The testing approach is explained."],
+                  plan: ["Describe a focused test structure."],
+                  excludedRequests: [],
+                },
+              },
+            ],
+          }),
+        );
+      default:
+        return Promise.resolve(
+          Response.json({
+            id: "execution-interaction",
+            steps: [{ type: "model_output", content: [{ type: "text", text: "Done." }] }],
+          }),
+        );
+    }
+  });
+  const loop = new AgentLoop(provider, await ToolExecutor.create(root, true));
+
+  assert.match(await loop.run("What is the weather?"), /not software-engineering work/);
+  assert.equal(await loop.run("Why?"), "Done.");
+
+  const followUpPayload = JSON.parse(requestBodies[1] ?? "") as {
+    previous_interaction_id?: string;
+    input: Array<{ type: string; content?: string }>;
+  };
+  assert.equal(followUpPayload.previous_interaction_id, "redirect-interaction");
+  assert.deepEqual(followUpPayload.input, [{ type: "user_input", content: "Why?" }]);
 });
 void test("revises the plan with evidence before the next workspace action", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));

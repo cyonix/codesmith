@@ -89,10 +89,6 @@ export class AgentLoop {
 
     if ("response" in route) {
       if (this.sessionStartPrompt === undefined) this.sessionStartPrompt = prompt;
-      if (this.provider.startIsolatedContinuation?.()) {
-        this.sessionStartContextCommitted = false;
-        this.sessionStartContextNeedsRefresh = true;
-      }
       this.provider.continuationTransaction?.commit();
       markReady();
       this.messages.push({ role: "assistant", content: route.response });
@@ -692,17 +688,21 @@ function sanitizeExecutionMessages(
   }
 
   const declarationArguments = JSON.stringify({
-    goal: contract.goal,
-    completionCriteria: contract.completionCriteria,
-    plan: contract.plan,
+    goal: sanitizeExcludedText(contract.goal, excludedRequests),
+    completionCriteria: contract.completionCriteria.map((criterion) =>
+      sanitizeExcludedText(criterion, excludedRequests),
+    ),
+    plan: contract.plan.map((step) => sanitizeExcludedText(step, excludedRequests)),
     excludedRequests: [],
   });
   const declarationResult = JSON.stringify({
     status: "declared",
     taskId: contract.taskId,
-    goal: contract.goal,
-    completionCriteria: contract.completionCriteria,
-    plan: contract.plan,
+    goal: sanitizeExcludedText(contract.goal, excludedRequests),
+    completionCriteria: contract.completionCriteria.map((criterion) =>
+      sanitizeExcludedText(criterion, excludedRequests),
+    ),
+    plan: contract.plan.map((step) => sanitizeExcludedText(step, excludedRequests)),
     excludedRequests: [],
   });
 
