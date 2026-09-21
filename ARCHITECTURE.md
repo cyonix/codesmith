@@ -322,7 +322,8 @@ CodeSmith follows these principles when it runs an agent loop.
 - [x] **Grounded context:** Use only the workspace, conversation, and tool
       context needed for the current decision. Task declaration can use compact
       conversation continuity, but execution rounds receive only the current
-      submission, its task contract and plan revisions, and fresh tool results.
+      submission, its task contract and plan revisions, fresh tool results, and
+      optional bounded episodic evidence marked as untrusted historical data.
       Workspace evidence is bounded: `read_file` returns at most 200 lines and
       20 KB with range and continuation metadata, including an intra-line offset
       for oversized lines. Provider continuation state is also detached before

@@ -108,6 +108,21 @@ void test("reads files in bounded line pages with continuation metadata", async 
   assert.equal(secondPage.next_start_line, undefined);
   assert.equal((firstPage.content as string) + (secondPage.content as string), source);
 });
+void test("reads a dense line file without materializing every line", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  await writeFile(path.join(root, "dense.txt"), "\n".repeat(10_000_000));
+  const tools = await ToolExecutor.create(root, true);
+
+  const result = JSON.parse(
+    await tools.execute(call("read_file", { path: "dense.txt" })),
+  ) as Record<string, unknown>;
+
+  assert.equal(result.start_line, 1);
+  assert.equal(result.end_line, 200);
+  assert.equal(result.total_lines, 10_000_001);
+  assert.equal(result.next_start_line, 201);
+});
 void test("marks an oversized line as incomplete without splitting UTF-8", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
   context.after(async () => rm(root, { recursive: true, force: true }));

@@ -567,19 +567,19 @@ function readTextPage(
   filePath: string,
   startOffset?: number,
 ): TextPage {
-  const lines = splitLines(content);
-  const totalLines = lines.length;
-  if (startOffset === undefined && startLine > totalLines) {
-    throw new SwiftCoderAIError(
-      "arguments",
-      `start_line must be between 1 and ${totalLines} for this file.`,
-    );
-  }
-
+  const totalLines = countLines(content);
   let effectiveStartLine = startLine;
   let startIndex: number;
+  let currentLine: TextLine | undefined;
   if (startOffset === undefined) {
-    startIndex = lines[startLine - 1].start;
+    currentLine = lineAt(content, startLine);
+    if (!currentLine) {
+      throw new SwiftCoderAIError(
+        "arguments",
+        `start_line must be between 1 and ${totalLines} for this file.`,
+      );
+    }
+    startIndex = currentLine.start;
   } else {
     if (startOffset > content.length) {
       throw new SwiftCoderAIError(
@@ -598,29 +598,27 @@ function readTextPage(
         "start_offset must point to a complete Unicode character.",
       );
     }
-    const offsetLineIndex = lines.findIndex(
-      (line) => startOffset >= line.start && startOffset <= line.end,
-    );
-    if (offsetLineIndex < 0) {
+    const locatedLine = lineContainingOffset(content, startOffset);
+    if (!locatedLine) {
       throw new SwiftCoderAIError(
         "arguments",
         "start_offset must point within a readable text line.",
       );
     }
-    effectiveStartLine = offsetLineIndex + 1;
+    effectiveStartLine = locatedLine.line;
+    currentLine = locatedLine.boundary;
     startIndex = startOffset;
   }
 
+  if (!currentLine) {
+    throw new SwiftCoderAIError("arguments", "Could not locate the requested text page.");
+  }
+
   let acceptedEndLine = effectiveStartLine - 1;
-  for (
-    let index = effectiveStartLine - 1;
-    index < totalLines && index < effectiveStartLine - 1 + MAXIMUM_READ_LINES;
-    index += 1
-  ) {
-    const line = lines[index];
-    if (!line) continue;
-    const pageContent = content.slice(startIndex, line.endWithSeparator);
-    const endLine = index + 1;
+  let acceptedEndIndex = startIndex;
+  for (let lineCount = 0; lineCount < MAXIMUM_READ_LINES && currentLine; lineCount += 1) {
+    const pageContent = content.slice(startIndex, currentLine.endWithSeparator);
+    const endLine = effectiveStartLine + lineCount;
     const page = createTextPage(
       pageContent,
       effectiveStartLine,
@@ -631,11 +629,14 @@ function readTextPage(
     );
     if (fitsTextPage(filePath, page)) {
       acceptedEndLine = endLine;
+      acceptedEndIndex = currentLine.endWithSeparator;
+      if (endLine >= totalLines) break;
+      currentLine = nextLine(content, currentLine.endWithSeparator);
       continue;
     }
 
-    if (index === effectiveStartLine - 1) {
-      const remainingLine = content.slice(startIndex, line.end);
+    if (lineCount === 0) {
+      const remainingLine = content.slice(startIndex, currentLine.end);
       const truncatedContent = longestFittingTextPrefix(
         remainingLine,
         (prefix) =>
@@ -650,6 +651,12 @@ function readTextPage(
           ),
         filePath,
       );
+      if (truncatedContent.length === 0 && currentLine.end > startIndex) {
+        throw new SwiftCoderAIError(
+          "arguments",
+          "File evidence cannot make forward progress within the evidence budget.",
+        );
+      }
       return createTextPage(
         truncatedContent,
         effectiveStartLine,
@@ -663,7 +670,7 @@ function readTextPage(
     break;
   }
 
-  const pageContent = content.slice(startIndex, lines[acceptedEndLine - 1].endWithSeparator);
+  const pageContent = content.slice(startIndex, acceptedEndIndex);
   return createTextPage(
     pageContent,
     effectiveStartLine,
@@ -692,21 +699,54 @@ interface TextPage {
   truncated_line?: boolean;
 }
 
-function splitLines(content: string): TextLine[] {
-  const lines: TextLine[] = [];
-  let start = 0;
-  const lineBreak = /\r\n|\n/g;
-  let match: RegExpExecArray | null;
-  while ((match = lineBreak.exec(content)) !== null) {
-    lines.push({
-      start,
-      end: match.index,
-      endWithSeparator: lineBreak.lastIndex,
-    });
-    start = lineBreak.lastIndex;
+function countLines(content: string): number {
+  let lineCount = 1;
+  let lineBreakIndex = content.indexOf("\n");
+  while (lineBreakIndex >= 0) {
+    lineCount += 1;
+    lineBreakIndex = content.indexOf("\n", lineBreakIndex + 1);
   }
-  lines.push({ start, end: content.length, endWithSeparator: content.length });
-  return lines;
+  return lineCount;
+}
+
+function lineAt(content: string, lineNumber: number): TextLine | undefined {
+  if (lineNumber < 1) return undefined;
+  let start = 0;
+  let currentLine = 1;
+  while (currentLine < lineNumber) {
+    const lineBreakIndex = content.indexOf("\n", start);
+    if (lineBreakIndex < 0) return undefined;
+    start = lineBreakIndex + 1;
+    currentLine += 1;
+  }
+  return nextLine(content, start);
+}
+
+function lineContainingOffset(
+  content: string,
+  offset: number,
+): { line: number; boundary: TextLine } | undefined {
+  let start = 0;
+  let line = 1;
+  while (true) {
+    const boundary = nextLine(content, start);
+    if (offset >= boundary.start && offset <= boundary.end) return { line, boundary };
+    if (boundary.endWithSeparator >= content.length) return undefined;
+    start = boundary.endWithSeparator;
+    line += 1;
+  }
+}
+
+function nextLine(content: string, start: number): TextLine {
+  const lineBreakIndex = content.indexOf("\n", start);
+  if (lineBreakIndex < 0) {
+    return { start, end: content.length, endWithSeparator: content.length };
+  }
+  const end =
+    lineBreakIndex > start && content.charCodeAt(lineBreakIndex - 1) === 13
+      ? lineBreakIndex - 1
+      : lineBreakIndex;
+  return { start, end, endWithSeparator: lineBreakIndex + 1 };
 }
 
 function createTextPage(
