@@ -22,5 +22,5 @@ export function escapeTerminalText(value: string): string {
 }
 
 export function escapeTerminalTextPreservingNewlines(value: string): string {
-  return value.split("\n").map(escapeTerminalText).join("\n");
+  return value.replaceAll("\r\n", "\n").split("\n").map(escapeTerminalText).join("\n");
 }

@@ -8,3 +8,10 @@ void test("escapes terminal controls without changing newline separators", () =>
     "first\\u001b[2J\nsecond\\u0007\nthird",
   );
 });
+
+void test("normalizes CRLF separators while escaping bare carriage returns", () => {
+  assert.equal(
+    escapeTerminalTextPreservingNewlines("first\r\nsecond\rthird"),
+    "first\nsecond\\u000dthird",
+  );
+});
