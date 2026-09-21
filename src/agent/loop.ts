@@ -333,6 +333,8 @@ export class AgentLoop {
             content: JSON.stringify({
               status: "declared",
               taskId: contract.taskId,
+              goal: contract.goal,
+              completionCriteria: contract.completionCriteria,
               plan: contract.plan,
             }),
             tool_call_id: declarationCall.id,

@@ -619,7 +619,7 @@ function readTextPage(
   ) {
     const line = lines[index];
     if (!line) continue;
-    const pageContent = content.slice(startIndex, line.end);
+    const pageContent = content.slice(startIndex, line.endWithSeparator);
     const endLine = index + 1;
     const page = createTextPage(
       pageContent,
@@ -663,7 +663,7 @@ function readTextPage(
     break;
   }
 
-  const pageContent = content.slice(startIndex, lines[acceptedEndLine - 1].end);
+  const pageContent = content.slice(startIndex, lines[acceptedEndLine - 1].endWithSeparator);
   return createTextPage(
     pageContent,
     effectiveStartLine,
@@ -675,9 +675,9 @@ function readTextPage(
 }
 
 interface TextLine {
-  value: string;
   start: number;
   end: number;
+  endWithSeparator: number;
 }
 
 interface TextPage {
@@ -698,10 +698,14 @@ function splitLines(content: string): TextLine[] {
   const lineBreak = /\r\n|\n/g;
   let match: RegExpExecArray | null;
   while ((match = lineBreak.exec(content)) !== null) {
-    lines.push({ value: content.slice(start, match.index), start, end: match.index });
+    lines.push({
+      start,
+      end: match.index,
+      endWithSeparator: lineBreak.lastIndex,
+    });
     start = lineBreak.lastIndex;
   }
-  lines.push({ value: content.slice(start), start, end: content.length });
+  lines.push({ start, end: content.length, endWithSeparator: content.length });
   return lines;
 }
 

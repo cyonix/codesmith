@@ -78,10 +78,12 @@ void test("rejects new-file content larger than 10 MB", async (context) => {
 void test("reads files in bounded line pages with continuation metadata", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
   context.after(async () => rm(root, { recursive: true, force: true }));
-  await writeFile(
-    path.join(root, "large.txt"),
-    Array.from({ length: 205 }, (_, index) => `line ${index + 1}`).join("\n"),
+  const source = Array.from({ length: 205 }, (_, index) => `line ${index + 1}`).reduce(
+    (value, line, index, lines) =>
+      `${value}${line}${index === lines.length - 1 ? "" : index % 2 ? "\n" : "\r\n"}`,
+    "",
   );
+  await writeFile(path.join(root, "large.txt"), source);
   const tools = await ToolExecutor.create(root, true);
 
   const firstPage = JSON.parse(
@@ -92,7 +94,8 @@ void test("reads files in bounded line pages with continuation metadata", async 
   assert.equal(firstPage.total_lines, 205);
   assert.equal(firstPage.truncated, true);
   assert.equal(firstPage.next_start_line, 201);
-  assert.equal((firstPage.content as string).split("\n").length, 200);
+  assert.equal((firstPage.content as string).split("\n").length, 201);
+  assert.equal((firstPage.content as string).endsWith("line 200\n"), true);
   assert.ok(Buffer.byteLength(firstPage.content as string, "utf8") <= 20_000);
 
   const secondPage = JSON.parse(
@@ -103,6 +106,7 @@ void test("reads files in bounded line pages with continuation metadata", async 
   assert.equal(secondPage.total_lines, 205);
   assert.equal(secondPage.truncated, false);
   assert.equal(secondPage.next_start_line, undefined);
+  assert.equal((firstPage.content as string) + (secondPage.content as string), source);
 });
 void test("marks an oversized line as incomplete without splitting UTF-8", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));

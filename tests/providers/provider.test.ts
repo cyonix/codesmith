@@ -419,7 +419,8 @@ void test("starts Gemini execution on a detached interaction after declaration",
   const declarationResult = {
     role: "tool" as const,
     tool_call_id: "task-1",
-    content: '{"status":"declared","taskId":"task-id"}',
+    content:
+      '{"status":"declared","taskId":"task-id","goal":"Current task.","completionCriteria":["The requested result is returned."],"plan":["Inspect the project.","Report the result."]}',
   };
 
   await provider.complete([{ role: "user", content: "Prior task." }], tools);
@@ -454,7 +455,8 @@ void test("starts Gemini execution on a detached interaction after declaration",
     { type: "user_input", content: "Current task." },
     {
       type: "user_input",
-      content: 'Validated task protocol result:\n{"status":"declared","taskId":"task-id"}',
+      content:
+        'Validated task protocol result:\n{"status":"declared","taskId":"task-id","goal":"Current task.","completionCriteria":["The requested result is returned."],"plan":["Inspect the project.","Report the result."]}',
     },
   ]);
 });
