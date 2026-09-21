@@ -752,6 +752,12 @@ function longestFittingTextPrefix(
   createPage: (prefix: string) => TextPage,
   filePath: string,
 ): string {
+  if (!fitsTextPage(filePath, createPage(""))) {
+    throw new SwiftCoderAIError(
+      "arguments",
+      "File metadata is too large to fit within the evidence budget.",
+    );
+  }
   const characters = Array.from(truncateUtf8(value, MAXIMUM_CONTEXT_BYTES));
   let low = 0;
   let high = characters.length;
@@ -760,6 +766,12 @@ function longestFittingTextPrefix(
     const prefix = characters.slice(0, count).join("");
     if (fitsTextPage(filePath, createPage(prefix))) low = count;
     else high = count - 1;
+  }
+  if (value.length > 0 && low === 0) {
+    throw new SwiftCoderAIError(
+      "arguments",
+      "File evidence cannot make forward progress within the evidence budget.",
+    );
   }
   return characters.slice(0, low).join("");
 }
