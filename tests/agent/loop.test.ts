@@ -167,6 +167,41 @@ void test("narrows mixed requests before workspace execution", async (context) =
     false,
   );
 });
+void test("sanitizes case and Unicode variants of excluded requests", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const provider = new MockProvider(
+    [
+      {
+        toolCalls: [
+          {
+            id: "task-normalized",
+            function: {
+              name: "declare_task",
+              arguments: JSON.stringify({
+                goal: "Explain tests and plan a cafe\u0301.",
+                completionCriteria: ["The explanation is complete."],
+                plan: ["Explain the test structure."],
+                excludedRequests: ["PLAN A CAFÉ."],
+              }),
+            },
+          },
+        ],
+      },
+      { content: "The software-engineering portion is complete.", toolCalls: [] },
+    ],
+    false,
+  );
+
+  assert.equal(
+    await new AgentLoop(provider, await ToolExecutor.create(root, true)).run("Explain tests."),
+    "The software-engineering portion is complete.",
+  );
+  assert.equal(
+    provider.messages[1]?.find((message) => message.role === "user")?.content,
+    "Explain tests and [excluded request omitted]",
+  );
+});
 void test("redirects fully unrelated requests before memory or workspace access", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
   context.after(async () => rm(root, { recursive: true, force: true }));

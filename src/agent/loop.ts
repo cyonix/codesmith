@@ -785,19 +785,43 @@ function sanitizeExecutionMessages(
 function sanitizeExcludedText(value: string, excludedRequests: readonly string[]): string {
   const matches = excludedRequests
     .filter((excludedRequest) => excludedRequest.length > 0)
-    .sort((left, right) => right.length - left.length);
+    .map((excludedRequest) => ({
+      normalized: normalizeExcludedText(excludedRequest),
+      original: excludedRequest,
+    }))
+    .sort((left, right) => right.normalized.length - left.normalized.length);
+  const segments = [
+    ...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(value),
+  ].map(({ segment }) => segment);
+  const normalizedSegments = segments.map(normalizeExcludedText);
   let sanitized = "";
-  for (let index = 0; index < value.length;) {
-    const match = matches.find((excludedRequest) => value.startsWith(excludedRequest, index));
+  for (let index = 0; index < segments.length;) {
+    const match = matches.find(({ normalized }) => {
+      let candidate = "";
+      for (let end = index; end < normalizedSegments.length; end += 1) {
+        candidate += normalizedSegments[end];
+        if (candidate === normalized) return true;
+        if (candidate.length >= normalized.length) break;
+      }
+      return false;
+    });
     if (match) {
       sanitized += "[excluded request omitted]";
-      index += match.length;
+      let candidate = "";
+      do {
+        candidate += normalizedSegments[index];
+        index += 1;
+      } while (candidate !== match.normalized && index < normalizedSegments.length);
     } else {
-      sanitized += value[index];
+      sanitized += segments[index];
       index += 1;
     }
   }
   return sanitized;
+}
+
+function normalizeExcludedText(value: string): string {
+  return value.normalize("NFKC").toLowerCase();
 }
 
 function sessionStartContextContent(prompt: string): string {
