@@ -121,11 +121,15 @@ function geminiInteractionInput(
     for (const call of message.tool_calls ?? []) toolNames.set(call.id, call.function.name);
   }
   const lastAssistant = messages.map((message) => message.role).lastIndexOf("assistant");
+  const messagesAfterLastAssistant = messages.slice(lastAssistant + 1);
+  const hasPendingFunctionResult = messagesAfterLastAssistant.some(
+    (message) => message.role === "tool",
+  );
   const redirectResultIndex =
-    includePendingFunctionResults && lastAssistant >= 0
+    includePendingFunctionResults && lastAssistant >= 0 && !hasPendingFunctionResult
       ? latestPendingRedirectResultIndex(messages, toolNames, lastAssistant)
       : -1;
-  const pendingMessages = messages.slice(lastAssistant + 1).filter((message, index) => {
+  const pendingMessages = messagesAfterLastAssistant.filter((message, index) => {
     const messageIndex = lastAssistant + 1 + index;
     return message.role !== "system" && messageIndex !== redirectResultIndex;
   });

@@ -19,6 +19,7 @@ import { promptForApiKey, selectModel } from "./setup.js";
 import { CodeSmithError } from "../shared/errors.js";
 import { ModelProvider } from "../providers/provider.js";
 import { formatPlanRevision, formatTaskContract } from "./render.js";
+import { escapeTerminalText } from "../shared/terminal-text.js";
 
 async function main(): Promise<void> {
   const options = parseOptions(process.argv.slice(2));
@@ -81,7 +82,7 @@ async function main(): Promise<void> {
       if (!prompt.trim()) continue;
 
       const answer = await activeSession.submit(prompt);
-      if (answer) stdout.write(`\n${answer}\n`);
+      if (answer) stdout.write(`\n${escapeTerminalText(answer)}\n`);
     }
   } finally {
     session?.close();

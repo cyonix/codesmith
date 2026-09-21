@@ -231,6 +231,22 @@ void test("preserves Gemini redirect context for a follow-up submission", async 
       case 2:
         return Promise.resolve(
           Response.json({
+            id: "invalid-task-interaction",
+            steps: [
+              {
+                type: "function_call",
+                id: "invalid-task-1",
+                name: "declare_task",
+                arguments: {
+                  goal: "Explain TypeScript testing.",
+                },
+              },
+            ],
+          }),
+        );
+      case 3:
+        return Promise.resolve(
+          Response.json({
             id: "task-interaction",
             steps: [
               {
@@ -280,6 +296,19 @@ void test("preserves Gemini redirect context for a follow-up submission", async 
     },
     { type: "user_input", content: "Why?" },
   ]);
+  const retryPayload = JSON.parse(requestBodies[2] ?? "") as {
+    input: Array<{ type: string; name?: string; call_id?: string }>;
+  };
+  assert.equal(
+    retryPayload.input.some(
+      (item) => item.type === "function_result" && item.name === "redirect_scope",
+    ),
+    false,
+  );
+  const retryFunctionResult = retryPayload.input.find((item) => item.type === "function_result");
+  assert.ok(retryFunctionResult);
+  assert.equal(retryFunctionResult.name, "declare_task");
+  assert.equal(retryFunctionResult.call_id, "invalid-task-1");
 });
 void test("revises the plan with evidence before the next workspace action", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));

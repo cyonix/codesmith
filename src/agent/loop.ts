@@ -1,7 +1,6 @@
 import { CodeSmithError } from "../shared/errors.js";
 import { previewSensitiveText } from "../shared/redaction.js";
 import { isSensitiveToolPayload, omittedSecretPreview } from "../shared/secret-files.js";
-import { escapeTerminalText } from "../shared/terminal-text.js";
 import type { AgentEvent } from "./events.js";
 import { EpisodicMemory } from "./episodic-memory.js";
 import {
@@ -753,9 +752,9 @@ function sessionStartContextContent(prompt: string): string {
 }
 
 function scopeRedirectResponse(reason: string, suggestedRequest: string): string {
-  const safeReason = escapeTerminalText(reason.replace(/\s+/g, " ").trim());
-  const safeSuggestion = escapeTerminalText(suggestedRequest.replace(/\s+/g, " ").trim());
-  return `I can help with software-engineering work, but not with this request. ${safeReason} You can ask instead: ${safeSuggestion}`;
+  const normalizedReason = reason.replace(/\s+/g, " ").trim();
+  const normalizedSuggestion = suggestedRequest.replace(/\s+/g, " ").trim();
+  return `I can help with software-engineering work, but not with this request. ${normalizedReason} You can ask instead: ${normalizedSuggestion}`;
 }
 
 function providerRequestEvent(
