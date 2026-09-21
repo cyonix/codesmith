@@ -107,7 +107,9 @@ export class AgentLoop {
     }
 
     const contract = route.contract;
-    const executionPrompt = (contract.excludedRequests?.length ?? 0) > 0 ? contract.goal : prompt;
+    const excludedRequests = contract.excludedRequests ?? [];
+    const executionPrompt =
+      excludedRequests.length > 0 ? sanitizeExcludedText(contract.goal, excludedRequests) : prompt;
 
     await this.initializeMemory?.();
     const memoryContext = this.memory
@@ -132,7 +134,7 @@ export class AgentLoop {
     const executionMessages: ChatMessage[] = [
       this.messages[0] ?? { role: "system", content: "" },
       { role: "user", content: executionPrompt },
-      ...route.messages,
+      ...sanitizeExecutionMessages(route.messages, excludedRequests),
     ];
 
     while (true) {
@@ -668,6 +670,38 @@ export class AgentLoop {
   private assertOpen(): void {
     if (this.isClosed()) throw new CodeSmithError("loop", "This agent session is closed.");
   }
+}
+
+function sanitizeExecutionMessages(
+  messages: readonly ChatMessage[],
+  excludedRequests: readonly string[],
+): ChatMessage[] {
+  if (excludedRequests.length === 0) return [...messages];
+
+  return messages.map((message) => ({
+    ...message,
+    content:
+      message.role === "assistant"
+        ? null
+        : typeof message.content !== "string"
+          ? message.content
+          : sanitizeExcludedText(message.content, excludedRequests),
+    tool_calls: message.tool_calls?.map((call) => ({
+      ...call,
+      function: {
+        ...call.function,
+        arguments: sanitizeExcludedText(call.function.arguments, excludedRequests),
+      },
+    })),
+  }));
+}
+
+function sanitizeExcludedText(value: string, excludedRequests: readonly string[]): string {
+  return excludedRequests.reduce(
+    (sanitized, excludedRequest) =>
+      sanitized.replaceAll(excludedRequest, "[excluded request omitted]"),
+    value,
+  );
 }
 
 function sessionStartContextContent(prompt: string): string {

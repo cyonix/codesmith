@@ -153,6 +153,10 @@ void test("narrows mixed requests before workspace execution", async (context) =
         message.role === "user" && message.content === "Explain how to test a TypeScript function.",
     ),
   );
+  assert.equal(
+    provider.messages[1]?.some((message) => JSON.stringify(message).includes("Plan a vacation.")),
+    false,
+  );
 });
 void test("redirects fully unrelated requests before memory or workspace access", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
