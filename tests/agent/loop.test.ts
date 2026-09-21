@@ -179,10 +179,10 @@ void test("sanitizes case and Unicode variants of excluded requests", async (con
             function: {
               name: "declare_task",
               arguments: JSON.stringify({
-                goal: "Explain tests and plan  a cafe\u0301. Also explain ΟΣ.",
+                goal: "Explain tests and plan  a cafe\u0301. Also explain ΟΣ and STRASSE.",
                 completionCriteria: ["The explanation is complete."],
                 plan: ["Explain the test structure."],
-                excludedRequests: ["PLAN A CAFÉ.", "ος"],
+                excludedRequests: ["PLAN A CAFÉ.", "ος", "straße"],
               }),
             },
           },
@@ -199,7 +199,7 @@ void test("sanitizes case and Unicode variants of excluded requests", async (con
   );
   assert.equal(
     provider.messages[1]?.find((message) => message.role === "user")?.content,
-    "Explain tests and [excluded request omitted] Also explain [excluded request omitted].",
+    "Explain tests and [excluded request omitted] Also explain [excluded request omitted] and [excluded request omitted].",
   );
 });
 void test("redirects fully unrelated requests before memory or workspace access", async (context) => {
@@ -256,14 +256,12 @@ void test("reserves history for a routing retry after repeated redirects", async
   context.after(async () => rm(root, { recursive: true, force: true }));
   const provider = new MockProvider(
     [
-      ...Array.from({ length: 7 }, () => ({ toolCalls: [scopeRedirectCall()] })),
+      ...Array.from({ length: 5 }, () => ({ toolCalls: [scopeRedirectCall()] })),
       {
-        toolCalls: [
-          {
-            id: "invalid-route",
-            function: { name: "declare_task", arguments: '{"goal":"Explain tests."}' },
-          },
-        ],
+        toolCalls: Array.from({ length: 11 }, (_, index) => ({
+          id: `invalid-route-${index}`,
+          function: { name: "declare_task", arguments: '{"goal":"Explain tests."}' },
+        })),
       },
       { toolCalls: [taskDeclarationCall()] },
       { content: "The retry succeeded.", toolCalls: [] },
@@ -272,7 +270,7 @@ void test("reserves history for a routing retry after repeated redirects", async
   );
   const loop = new AgentLoop(provider, await ToolExecutor.create(root, true));
 
-  for (let index = 0; index < 7; index += 1) {
+  for (let index = 0; index < 5; index += 1) {
     await loop.run(`Unrelated request ${index}`);
   }
 

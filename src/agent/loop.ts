@@ -601,7 +601,9 @@ export class AgentLoop {
   }
 
   private trimPendingRedirectHistory(): void {
-    if (this.messages.length <= AgentLoop.maximumHistoryMessages - 5) return;
+    const maximumRoutingRetryMessages = AgentLoop.maximumToolCallsPerRun + 3;
+    if (this.messages.length <= AgentLoop.maximumHistoryMessages - maximumRoutingRetryMessages)
+      return;
 
     let redirectAssistantIndex = -1;
     for (let index = this.messages.length - 1; index >= 1; index -= 1) {
@@ -787,7 +789,6 @@ function sanitizeExcludedText(value: string, excludedRequests: readonly string[]
     .filter((excludedRequest) => excludedRequest.length > 0)
     .map((excludedRequest) => ({
       normalized: normalizeExcludedText(excludedRequest),
-      original: excludedRequest,
     }))
     .sort((left, right) => right.normalized.length - left.normalized.length);
   const segments = [
@@ -796,10 +797,9 @@ function sanitizeExcludedText(value: string, excludedRequests: readonly string[]
   let sanitized = "";
   for (let index = 0; index < segments.length;) {
     const match = matches
-      .map(({ normalized, original }) => ({
+      .map(({ normalized }) => ({
         end: excludedMatchEnd(segments, index, normalized),
         normalized,
-        original,
       }))
       .find(({ end }) => end >= 0);
     if (match) {
@@ -819,18 +819,26 @@ function excludedMatchEnd(
   normalizedTarget: string,
 ): number {
   let candidate = "";
-  for (let end = start; end < segments.length; end += 1) {
+  const maximumEnd = Math.min(
+    segments.length,
+    start + Math.max(normalizedTarget.length * 3, normalizedTarget.length + 4),
+  );
+  for (let end = start; end < maximumEnd; end += 1) {
     candidate += segments[end];
     const normalizedCandidate = normalizeExcludedText(candidate);
-    if (normalizedCandidate === normalizedTarget) return end + 1;
-    if (normalizedCandidate.length >= normalizedTarget.length) break;
+    if (excludedTextCollator.compare(normalizedCandidate, normalizedTarget) === 0) return end + 1;
   }
   return -1;
 }
 
 function normalizeExcludedText(value: string): string {
-  return value.normalize("NFKC").toLowerCase().replace(/\s+/gu, " ");
+  return value.normalize("NFKC").replace(/\s+/gu, " ");
 }
+
+const excludedTextCollator = new Intl.Collator("und", {
+  sensitivity: "base",
+  usage: "search",
+});
 
 function sessionStartContextContent(prompt: string): string {
   return `Session-start request:\n${prompt}`;
