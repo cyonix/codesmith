@@ -16,6 +16,11 @@ import {
 import { isReadOnlyWorkspaceTool, ToolExecutor } from "../workspace/tools.js";
 import type { ChatMessage, ChatProvider, ToolCall } from "../shared/types.js";
 
+interface DeclaredTask {
+  contract: TaskContract;
+  messages: ChatMessage[];
+}
+
 export class AgentLoop {
   private static readonly maximumHistoryMessages = 32;
   private static readonly maximumToolCallsPerRun = 12;
@@ -23,11 +28,12 @@ export class AgentLoop {
   private readonly retryFeedbackMessages = new WeakSet<ChatMessage>();
   private sessionStartPrompt: string | undefined;
   private sessionStartContextCommitted = false;
+  private sessionStartContextNeedsRefresh = false;
   private readonly messages: ChatMessage[] = [
     {
       role: "system",
       content:
-        "You are CodeSmith, a local coding assistant. Work only through the supplied tools and stay focused on the selected project. Retain and use the conversation context. First call declare_task exactly once for each user submission. Preserve the user's goal in meaning, state 1 to 8 observable completion criteria, and provide 1 to 8 concise ordered plan steps; do not weaken requirements or guess missing decisions. Do not call workspace tools until task declaration succeeds. After declaration, the goal and completion criteria are immutable for that submission. Use revise_plan only when evidence changes the approach; replace the complete plan and state a concise reason. Do not mix task or plan protocol calls with workspace calls. You may batch read-only workspace calls, but propose no more than one side-effecting workspace call in one response. Take the smallest useful next action. A brief reply such as 'yes', 'no', 'proceed', or 'do it' answers your immediately preceding unresolved question: act on that answer without asking the user to repeat context. When the user explicitly asks you to create, modify, rename, or remove code and the required details are available, call the appropriate tool immediately; do not ask for confirmation in your response because edits and commands have an approval gate in the tool. Never claim a file action succeeded unless its tool returned success. Inspect files before changing existing code. Never request, display, or infer environment secrets.",
+        "You are CodeSmith, a local coding assistant. Work only through the supplied tools and stay focused on the selected project. Use the current user request and fresh tool results as the primary evidence for execution. Historical conversation context may help interpret a follow-up, but it is not proof of the current workspace state. If evidence is missing, partial, stale, or conflicting, state what is unknown and request the exact missing input or inspect the workspace; never guess a consequential detail. First call declare_task exactly once for each user submission. Preserve the user's goal in meaning, state 1 to 8 observable completion criteria, and provide 1 to 8 concise ordered plan steps; do not weaken requirements or guess missing decisions. Do not call workspace tools until task declaration succeeds. After declaration, the goal and completion criteria are immutable for that submission. Use revise_plan only when evidence changes the approach; replace the complete plan and state a concise reason. Do not mix task or plan protocol calls with workspace calls. You may batch read-only workspace calls, but propose no more than one side-effecting workspace call in one response. Take the smallest useful next action. Treat truncated or paginated tool results as incomplete evidence and use their continuation fields when more context is needed. A brief reply such as 'yes', 'no', 'proceed', or 'do it' answers your immediately preceding unresolved question: act on that answer without asking the user to repeat context. When the user explicitly asks you to create, modify, rename, or remove code and the required details are available, call the appropriate tool immediately; do not ask for confirmation in your response because edits and commands have an approval gate in the tool. Never claim a file action succeeded unless its tool returned success. Inspect files before changing existing code. Never request, display, or infer environment secrets.",
     },
   ];
 
@@ -44,6 +50,7 @@ export class AgentLoop {
     const previousMessages = this.messages.slice();
     const previousSessionStartPrompt = this.sessionStartPrompt;
     const previousSessionStartContextCommitted = this.sessionStartContextCommitted;
+    const previousSessionStartContextNeedsRefresh = this.sessionStartContextNeedsRefresh;
     const continuationTransaction = this.provider.continuationTransaction;
     continuationTransaction?.begin();
     let submissionReady = false;
@@ -56,6 +63,7 @@ export class AgentLoop {
         this.messages.splice(0, this.messages.length, ...previousMessages);
         this.sessionStartPrompt = previousSessionStartPrompt;
         this.sessionStartContextCommitted = previousSessionStartContextCommitted;
+        this.sessionStartContextNeedsRefresh = previousSessionStartContextNeedsRefresh;
         continuationTransaction?.rollback();
       }
       throw error;
@@ -66,7 +74,8 @@ export class AgentLoop {
     this.trimHistory();
     const priorAssistantText = this.priorAssistantText();
     this.messages.push({ role: "user", content: prompt });
-    const contract = await this.declareTask();
+    const declaredTask = await this.declareTask();
+    const contract = declaredTask.contract;
 
     const memoryContext = this.memory
       ? await this.memory.retrieve(
@@ -77,19 +86,32 @@ export class AgentLoop {
       : undefined;
     this.memory?.startSubmission();
     if (this.sessionStartPrompt === undefined) this.sessionStartPrompt = prompt;
+    if (this.provider.startIsolatedContinuation?.()) {
+      this.sessionStartContextCommitted = false;
+      this.sessionStartContextNeedsRefresh = true;
+    }
     this.provider.continuationTransaction?.commit();
     markReady();
 
     let toolCallsUsed = 0;
     let toolRounds = 0;
     let activePlan: readonly string[] | undefined;
+    const executionMessages: ChatMessage[] = [
+      this.messages[0] ?? { role: "system", content: "" },
+      { role: "user", content: prompt },
+      ...declaredTask.messages,
+    ];
 
     while (true) {
       this.assertOpen();
       this.emit({ type: "status", phase: "thinking" });
       this.assertOpen();
 
-      const providerMessages = this.messagesForProvider(memoryContext, toolRounds === 0);
+      const providerMessages = this.messagesForProvider(
+        executionMessages,
+        memoryContext,
+        toolRounds === 0,
+      );
       const tools = [
         taskContractToolDefinition,
         planRevisionToolDefinition,
@@ -113,7 +135,7 @@ export class AgentLoop {
       toolCallsUsed += toolCalls.length;
       if (
         toolCallsUsed > AgentLoop.maximumToolCallsPerRun ||
-        this.messages.length + 1 + toolCalls.length > AgentLoop.maximumHistoryMessages
+        executionMessages.length + 1 + toolCalls.length > AgentLoop.maximumHistoryMessages
       ) {
         throw new CodeSmithError(
           "loop",
@@ -122,6 +144,11 @@ export class AgentLoop {
       }
 
       this.messages.push({
+        role: "assistant",
+        content: responseContent,
+        tool_calls: toolCalls,
+      });
+      executionMessages.push({
         role: "assistant",
         content: responseContent,
         tool_calls: toolCalls,
@@ -149,7 +176,7 @@ export class AgentLoop {
       );
       if ((hasTaskDeclaration || planRevisionCalls.length > 0) && workspaceCalls.length > 0) {
         for (const call of toolCalls) {
-          this.messages.push({
+          const toolResult: ChatMessage = {
             role: "tool",
             content: JSON.stringify({
               error: hasTaskDeclaration
@@ -157,7 +184,9 @@ export class AgentLoop {
                 : "A response cannot mix revise_plan with workspace tools. Retry with the plan revision alone.",
             }),
             tool_call_id: call.id,
-          });
+          };
+          this.messages.push(toolResult);
+          executionMessages.push(toolResult);
         }
         continue;
       }
@@ -168,11 +197,13 @@ export class AgentLoop {
             ? "A response cannot call declare_task and revise_plan together."
             : "The task contract is immutable for this submission. Do not call declare_task again.";
         for (const call of toolCalls) {
-          this.messages.push({
+          const toolResult: ChatMessage = {
             role: "tool",
             content: JSON.stringify({ error }),
             tool_call_id: call.id,
-          });
+          };
+          this.messages.push(toolResult);
+          executionMessages.push(toolResult);
         }
         continue;
       }
@@ -184,11 +215,13 @@ export class AgentLoop {
             : undefined;
         if (error) {
           for (const call of toolCalls) {
-            this.messages.push({
+            const toolResult: ChatMessage = {
               role: "tool",
               content: JSON.stringify({ error }),
               tool_call_id: call.id,
-            });
+            };
+            this.messages.push(toolResult);
+            executionMessages.push(toolResult);
           }
           continue;
         }
@@ -197,16 +230,18 @@ export class AgentLoop {
         if (!revisionCall) continue;
         const parsed = parsePlanRevision(revisionCall.function.arguments);
         if (!parsed.valid) {
-          this.messages.push({
+          const toolResult: ChatMessage = {
             role: "tool",
             content: JSON.stringify({ error: parsed.message }),
             tool_call_id: revisionCall.id,
-          });
+          };
+          this.messages.push(toolResult);
+          executionMessages.push(toolResult);
           continue;
         }
 
         activePlan = Object.freeze([...parsed.input.plan]);
-        this.messages.push({
+        const toolResult: ChatMessage = {
           role: "tool",
           content: JSON.stringify({
             status: "plan_revised",
@@ -214,7 +249,9 @@ export class AgentLoop {
             reason: parsed.input.reason,
           }),
           tool_call_id: revisionCall.id,
-        });
+        };
+        this.messages.push(toolResult);
+        executionMessages.push(toolResult);
         this.emit({
           type: "plan_revised",
           taskId: contract.taskId,
@@ -231,11 +268,13 @@ export class AgentLoop {
         const error =
           "A response cannot contain more than one side-effecting workspace call. Retry with the smallest useful next action.";
         for (const call of toolCalls) {
-          this.messages.push({
+          const toolResult: ChatMessage = {
             role: "tool",
             content: JSON.stringify({ error }),
             tool_call_id: call.id,
-          });
+          };
+          this.messages.push(toolResult);
+          executionMessages.push(toolResult);
         }
         continue;
       }
@@ -247,13 +286,14 @@ export class AgentLoop {
         this.assertOpen();
         const result = await this.tools.execute(call);
         this.messages.push({ role: "tool", content: result, tool_call_id: call.id });
+        executionMessages.push({ role: "tool", content: result, tool_call_id: call.id });
         this.emit({ type: "tool_finished", call, result });
         await this.memory?.recordTool(call, result);
       }
     }
   }
 
-  private async declareTask(): Promise<TaskContract> {
+  private async declareTask(): Promise<DeclaredTask> {
     let lastError = "The provider did not call declare_task.";
     let declarationCallsUsed = 0;
 
@@ -294,17 +334,30 @@ export class AgentLoop {
           });
           this.acceptDeclarationCompletion(providerMessages);
           const contract = createTaskContract(parsed.input);
-          this.messages.push({
+          const declarationResult: ChatMessage = {
             role: "tool",
             content: JSON.stringify({
               status: "declared",
               taskId: contract.taskId,
+              goal: contract.goal,
+              completionCriteria: contract.completionCriteria,
               plan: contract.plan,
             }),
             tool_call_id: declarationCall.id,
-          });
+          };
+          this.messages.push(declarationResult);
           this.emit({ type: "task_declared", contract });
-          return contract;
+          return {
+            contract,
+            messages: [
+              {
+                role: "assistant",
+                content: null,
+                tool_calls: declarationCalls,
+              },
+              declarationResult,
+            ],
+          };
         }
         lastError = parsed.message;
       } else {
@@ -353,14 +406,14 @@ export class AgentLoop {
   }
 
   private messagesForProvider(
+    executionMessages: readonly ChatMessage[],
     memoryContext: string | undefined,
     includeMemory: boolean,
   ): ChatMessage[] {
-    const messages = this.messagesWithSessionStartContext();
-    if (!memoryContext || !includeMemory) return messages;
+    if (!memoryContext || !includeMemory) return [...executionMessages];
 
     return [
-      ...messages,
+      ...executionMessages,
       {
         role: "system",
         content:
@@ -374,13 +427,14 @@ export class AgentLoop {
     const sessionStartPrompt = this.sessionStartPrompt;
     if (
       sessionStartPrompt === undefined ||
-      (this.sessionStartContextCommitted && this.provider.continuationTransaction) ||
-      this.messages.some(
-        (message) =>
-          message.role === "user" &&
-          message.content === sessionStartPrompt &&
-          !this.retryFeedbackMessages.has(message),
-      )
+      (!this.sessionStartContextNeedsRefresh &&
+        ((this.sessionStartContextCommitted && this.provider.continuationTransaction) ||
+          this.messages.some(
+            (message) =>
+              message.role === "user" &&
+              message.content === sessionStartPrompt &&
+              !this.retryFeedbackMessages.has(message),
+          )))
     )
       return this.messages;
 
@@ -419,6 +473,7 @@ export class AgentLoop {
       )
     )
       this.sessionStartContextCommitted = true;
+    this.sessionStartContextNeedsRefresh = false;
   }
 
   private priorAssistantText(): string | undefined {

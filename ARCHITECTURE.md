@@ -319,9 +319,18 @@ CodeSmith follows these principles when it runs an agent loop.
       read-only file and Git inspection can still run in a batch.
       Planning never replaces the existing approval required for edits, Git
       inspection, commands, or model downloads.
-- [ ] **Grounded context:** Use only the workspace, conversation, and tool
-      context needed for the current decision. State uncertainty instead of
-      guessing.
+- [x] **Grounded context:** Use only the workspace, conversation, and tool
+      context needed for the current decision. Task declaration can use compact
+      conversation continuity, but execution rounds receive only the current
+      submission, its task contract and plan revisions, fresh tool results, and
+      optional bounded episodic evidence marked as untrusted historical data.
+      Workspace evidence is bounded: `read_file` returns at most 200 lines and
+      20 KB with range and continuation metadata, including an intra-line offset
+      for oversized lines. Provider continuation state is also detached before
+      execution so providers cannot replay prior submissions. Directory listings
+      and searches report pagination or truncation. Treat partial, stale,
+      missing, or conflicting evidence as incomplete, state the uncertainty, and
+      request the exact missing input instead of guessing.
 - [ ] **Task-scope discipline:** Focus on the selected project and
       software-engineering work. Politely redirect unrelated requests.
 - [ ] **Episodic tool-execution memory:**
@@ -357,6 +366,18 @@ The model can request these local operations:
 
 CodeSmith asks for approval before every edit, Git operation, and command. It
 does not ask when you use `--yes` or set `autoApprove: true`.
+
+Read-only workspace results are bounded before they reach the model. `read_file`
+supports an optional 1-based `start_line` and returns at most 200 lines and
+20 KB, with `start_line`, `end_line`, `total_lines`, `truncated`, and
+`next_start_line` metadata when more evidence is available. Oversized lines also
+return `next_start_offset`; pass that 0-based character offset as `start_offset`
+to continue the same line. `list_files` supports
+an optional non-negative `offset`, returns at most 200 entries, and reports
+`total_files` and `next_offset`. `search_files` returns at most 50 matches and
+marks capped results with `truncated: true`. These limits are evidence limits;
+the separate 10 MiB local file-size limit still applies to file validation and
+patching.
 
 ### Project profiles
 

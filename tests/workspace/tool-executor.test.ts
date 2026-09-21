@@ -75,6 +75,207 @@ void test("rejects new-file content larger than 10 MB", async (context) => {
   assert.match(resultError(result), /at most 10 MB/);
   await assert.rejects(() => readFile(filePath));
 });
+void test("reads files in bounded line pages with continuation metadata", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const source = Array.from({ length: 205 }, (_, index) => `line ${index + 1}`).reduce(
+    (value, line, index, lines) =>
+      `${value}${line}${index === lines.length - 1 ? "" : index % 2 ? "\n" : "\r\n"}`,
+    "",
+  );
+  await writeFile(path.join(root, "large.txt"), source);
+  const tools = await ToolExecutor.create(root, true);
+
+  const firstPage = JSON.parse(
+    await tools.execute(call("read_file", { path: "large.txt" })),
+  ) as Record<string, unknown>;
+  assert.equal(firstPage.start_line, 1);
+  assert.equal(firstPage.end_line, 200);
+  assert.equal(firstPage.total_lines, 205);
+  assert.equal(firstPage.truncated, true);
+  assert.equal(firstPage.next_start_line, 201);
+  assert.equal((firstPage.content as string).split("\n").length, 201);
+  assert.equal((firstPage.content as string).endsWith("line 200\n"), true);
+  assert.ok(Buffer.byteLength(firstPage.content as string, "utf8") <= 20_000);
+
+  const secondPage = JSON.parse(
+    await tools.execute(call("read_file", { path: "large.txt", start_line: 201 })),
+  ) as Record<string, unknown>;
+  assert.equal(secondPage.start_line, 201);
+  assert.equal(secondPage.end_line, 205);
+  assert.equal(secondPage.total_lines, 205);
+  assert.equal(secondPage.truncated, false);
+  assert.equal(secondPage.next_start_line, undefined);
+  assert.equal((firstPage.content as string) + (secondPage.content as string), source);
+});
+void test("reads a dense line file without materializing every line", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  await writeFile(path.join(root, "dense.txt"), "\n".repeat(10_000_000));
+  const tools = await ToolExecutor.create(root, true);
+
+  const result = JSON.parse(
+    await tools.execute(call("read_file", { path: "dense.txt" })),
+  ) as Record<string, unknown>;
+
+  assert.equal(result.start_line, 1);
+  assert.equal(result.end_line, 200);
+  assert.equal(result.total_lines, 10_000_001);
+  assert.equal(result.next_start_line, 201);
+});
+void test("marks an oversized line as incomplete without splitting UTF-8", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  await writeFile(path.join(root, "large-line.txt"), "😀".repeat(6_000));
+  const tools = await ToolExecutor.create(root, true);
+
+  const result = JSON.parse(
+    await tools.execute(call("read_file", { path: "large-line.txt" })),
+  ) as Record<string, unknown>;
+  const returned = result.content as string;
+  assert.equal(result.truncated, true);
+  assert.equal(result.truncated_line, true);
+  assert.equal(result.total_lines, 1);
+  assert.ok(Buffer.byteLength(returned, "utf8") <= 20_000);
+  assert.equal(returned.endsWith("\uFFFD"), false);
+
+  const continuation = JSON.parse(
+    await tools.execute(
+      call("read_file", {
+        path: "large-line.txt",
+        start_offset: result.next_start_offset,
+      }),
+    ),
+  ) as Record<string, unknown>;
+  assert.equal(continuation.start_line, 1);
+  assert.equal(continuation.start_offset, result.next_start_offset);
+  assert.equal(continuation.truncated, false);
+  assert.equal(returned + (continuation.content as string), "😀".repeat(6_000));
+});
+void test("preserves CRLF content returned for an exact multi-line patch", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const filePath = path.join(root, "crlf.txt");
+  await writeFile(filePath, "first\r\nsecond\r\nthird");
+  const tools = await ToolExecutor.create(root, true);
+
+  const readResult = JSON.parse(await tools.execute(call("read_file", { path: "crlf.txt" }))) as {
+    content: string;
+  };
+  assert.equal(readResult.content, "first\r\nsecond\r\nthird");
+
+  const patchResult = JSON.parse(
+    await tools.execute(
+      call("apply_patch", {
+        path: "crlf.txt",
+        expected_content: "first\r\nsecond",
+        replacement: "first\r\nupdated",
+      }),
+    ),
+  ) as { status: string };
+  assert.equal(patchResult.status, "applied");
+  assert.equal(await readFile(filePath, "utf8"), "first\r\nupdated\r\nthird");
+});
+void test("keeps the complete escaped read result within the evidence budget", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  await writeFile(path.join(root, "escaped.txt"), "\\".repeat(10_000));
+  const tools = await ToolExecutor.create(root, true);
+
+  const result = await tools.execute(call("read_file", { path: "escaped.txt" }));
+  assert.ok(Buffer.byteLength(result, "utf8") <= 20_000);
+  const parsed = JSON.parse(result) as { content: string; truncated: boolean };
+  assert.equal(parsed.truncated, true);
+  assert.ok(parsed.content.length < 10_000);
+});
+void test("bounds complete listing and search results after JSON escaping", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  await Promise.all(
+    Array.from({ length: 200 }, (_, index) =>
+      writeFile(
+        path.join(root, `escaped-${String(index).padStart(3, "0")}-${"\\".repeat(80)}.txt`),
+        `needle${'"'.repeat(300)}`,
+      ),
+    ),
+  );
+  const tools = await ToolExecutor.create(root, true);
+
+  const listing = await tools.execute(call("list_files", {}));
+  assert.ok(Buffer.byteLength(listing, "utf8") <= 20_000);
+  const parsedListing = JSON.parse(listing) as { files: string[]; truncated: boolean };
+  assert.equal(parsedListing.truncated, true);
+
+  const search = await tools.execute(call("search_files", { query: "needle" }));
+  assert.ok(Buffer.byteLength(search, "utf8") <= 20_000);
+  const parsedSearch = JSON.parse(search) as {
+    matches: unknown[];
+    truncated: boolean;
+  };
+  assert.equal(parsedSearch.truncated, true);
+  assert.ok(parsedSearch.matches.length < 50);
+});
+void test("paginates directory listings and marks capped searches", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  await Promise.all(
+    Array.from({ length: 205 }, (_, index) =>
+      writeFile(path.join(root, `file-${String(index).padStart(3, "0")}.txt`), "needle"),
+    ),
+  );
+  await Promise.all(
+    Array.from({ length: 50 }, (_, index) =>
+      writeFile(path.join(root, `zz-exact-${String(index).padStart(2, "0")}.txt`), "exact"),
+    ),
+  );
+  const tools = await ToolExecutor.create(root, true);
+
+  const listing = JSON.parse(await tools.execute(call("list_files", { offset: 200 }))) as Record<
+    string,
+    unknown
+  >;
+  assert.deepEqual((listing.files as string[]).slice(0, 5), [
+    "file-200.txt",
+    "file-201.txt",
+    "file-202.txt",
+    "file-203.txt",
+    "file-204.txt",
+  ]);
+  assert.equal((listing.files as string[]).length, 55);
+  assert.equal(listing.total_files, 255);
+  assert.equal(listing.truncated, false);
+
+  const search = JSON.parse(
+    await tools.execute(call("search_files", { query: "needle" })),
+  ) as Record<string, unknown>;
+  assert.equal((search.matches as unknown[]).length, 50);
+  assert.equal(search.truncated, true);
+
+  const exactSearch = JSON.parse(
+    await tools.execute(call("search_files", { query: "exact" })),
+  ) as Record<string, unknown>;
+  assert.equal((exactSearch.matches as unknown[]).length, 50);
+  assert.equal(exactSearch.truncated, false);
+});
+void test("rejects invalid grounded-context pagination arguments", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  await writeFile(path.join(root, "file.txt"), "content");
+  const tools = await ToolExecutor.create(root, true);
+
+  assert.match(
+    resultError(await tools.execute(call("read_file", { path: "file.txt", start_line: 0 }))),
+    /start_line must be a safe integer greater than or equal to 1/,
+  );
+  assert.match(
+    resultError(await tools.execute(call("read_file", { path: "file.txt", start_offset: -1 }))),
+    /start_offset must be a safe integer greater than or equal to 0/,
+  );
+  assert.match(
+    resultError(await tools.execute(call("list_files", { offset: -1 }))),
+    /offset must be a safe integer greater than or equal to 0/,
+  );
+});
 void test("deletes a root file after approval", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
   context.after(async () => rm(root, { recursive: true, force: true }));
@@ -349,7 +550,7 @@ void test("escapes terminal controls in patch target paths", async (context) => 
   assert.match(approvalSummary, /evil\\u001b\[2J\.swift/);
   assert.doesNotMatch(approvalSummary, new RegExp(String.fromCharCode(0x1b)));
 });
-function call(name: string, argumentsValue: Record<string, string>): ToolCall {
+function call(name: string, argumentsValue: Record<string, unknown>): ToolCall {
   return { id: "test", function: { name, arguments: JSON.stringify(argumentsValue) } };
 }
 

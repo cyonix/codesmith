@@ -26,6 +26,11 @@ import type { JsonValue, ToolCall, ToolDefinition } from "../shared/types.js";
 
 const MAXIMUM_TEXT_BYTES = 10_000_000;
 const MAXIMUM_COMMAND_OUTPUT_BYTES = 20_000;
+const MAXIMUM_CONTEXT_BYTES = 20_000;
+const MAXIMUM_READ_LINES = 200;
+const MAXIMUM_LIST_ENTRIES = 200;
+const MAXIMUM_SEARCH_MATCHES = 50;
+const SEARCH_SCAN_LIMIT = MAXIMUM_SEARCH_MATCHES + 1;
 
 const trustedCommandDirectories = [
   "/usr/bin",
@@ -122,15 +127,36 @@ export class ToolExecutor {
 
   private async listFiles(argumentsValue: Record<string, unknown>): Promise<string> {
     await this.sandbox.assertUnchanged();
+    const offset = optionalInteger(argumentsValue.offset, "offset", 0) ?? 0;
     const directory = this.permitted(
       await this.sandbox.resolve(optionalString(argumentsValue.path, "path") ?? "."),
     );
-    const files = (await readVerifiedDirectory(this.sandbox.root, directory))
+    const allFiles = (await readVerifiedDirectory(this.sandbox.root, directory))
       .map((entry) => entry.name)
       .filter((entry) => entry !== ".git")
       .sort();
+    const files = takeJsonArrayWithinBytes(
+      allFiles.slice(offset, offset + MAXIMUM_LIST_ENTRIES),
+      MAXIMUM_CONTEXT_BYTES,
+      (items) =>
+        JSON.stringify({
+          files: items,
+          offset,
+          total_files: allFiles.length,
+          truncated: offset + items.length < allFiles.length,
+          ...(offset + items.length < allFiles.length
+            ? { next_offset: offset + items.length }
+            : {}),
+        }),
+    );
     await this.sandbox.assertUnchanged();
-    return JSON.stringify({ files });
+    return JSON.stringify({
+      files,
+      offset,
+      total_files: allFiles.length,
+      truncated: offset + files.length < allFiles.length,
+      ...(offset + files.length < allFiles.length ? { next_offset: offset + files.length } : {}),
+    });
   }
 
   private async searchFiles(argumentsValue: Record<string, unknown>): Promise<string> {
@@ -142,7 +168,19 @@ export class ToolExecutor {
     const matches: Array<{ path: string; line: number; text: string }> = [];
     await this.searchDirectory(directory, query, matches);
     await this.sandbox.assertUnchanged();
-    return JSON.stringify({ matches });
+    const boundedMatches = takeJsonArrayWithinBytes(
+      matches.slice(0, MAXIMUM_SEARCH_MATCHES),
+      MAXIMUM_CONTEXT_BYTES,
+      (items) =>
+        JSON.stringify({
+          matches: items,
+          truncated: matches.length > MAXIMUM_SEARCH_MATCHES || items.length < matches.length,
+        }),
+    );
+    return JSON.stringify({
+      matches: boundedMatches,
+      truncated: matches.length > MAXIMUM_SEARCH_MATCHES || boundedMatches.length < matches.length,
+    });
   }
 
   private async searchDirectory(
@@ -151,7 +189,7 @@ export class ToolExecutor {
     matches: Array<{ path: string; line: number; text: string }>,
   ): Promise<void> {
     for (const entry of await readVerifiedDirectory(this.sandbox.root, directory)) {
-      if (matches.length >= 50 || entry.name === ".git") continue;
+      if (matches.length >= SEARCH_SCAN_LIMIT || entry.name === ".git") continue;
       const entryPath = path.join(directory, entry.name);
       if (entry.isDirectory()) {
         await this.searchDirectory(entryPath, query, matches);
@@ -167,7 +205,7 @@ export class ToolExecutor {
             line: index + 1,
             text: line.slice(0, 300),
           });
-          if (matches.length === 50) return;
+          if (matches.length === SEARCH_SCAN_LIMIT) return;
         }
       }
     }
@@ -175,6 +213,8 @@ export class ToolExecutor {
 
   private async readFile(argumentsValue: Record<string, unknown>): Promise<string> {
     await this.sandbox.assertUnchanged();
+    const startLine = optionalInteger(argumentsValue.start_line, "start_line", 1) ?? 1;
+    const startOffset = optionalInteger(argumentsValue.start_offset, "start_offset", 0);
     const filePath = this.permitted(
       await this.sandbox.resolve(requiredString(argumentsValue.path, "path")),
     );
@@ -182,7 +222,10 @@ export class ToolExecutor {
     await this.sandbox.assertUnchanged();
     if (content === undefined)
       throw new SwiftCoderAIError("arguments", "File is not valid UTF-8 text.");
-    return JSON.stringify({ path: this.sandbox.relative(filePath), content });
+    return JSON.stringify({
+      path: this.sandbox.relative(filePath),
+      ...readTextPage(content, startLine, this.sandbox.relative(filePath), startOffset),
+    });
   }
 
   private async createFile(argumentsValue: Record<string, unknown>): Promise<string> {
@@ -414,19 +457,19 @@ function toolDefinitions(profile: ProjectProfile): ToolDefinition[] {
   const definitions = [
     definition(
       "list_files",
-      "List direct children of a project-relative directory. Omit path for the project root.",
-      { path: stringSchema() },
+      "List up to 200 direct children of a project-relative directory. Results include pagination metadata. Omit path for the project root.",
+      { path: stringSchema(), offset: numberSchema(0) },
     ),
     definition(
       "search_files",
-      "Search UTF-8 text files under the project root for a literal query.",
+      "Search UTF-8 text files under the project root for a literal query. Results may be capped at 50 matches and include truncation metadata.",
       { query: stringSchema(), path: stringSchema() },
       ["query"],
     ),
     definition(
       "read_file",
-      "Read a UTF-8 text file within the project root.",
-      { path: stringSchema() },
+      "Read up to 200 lines and 20 KB from a UTF-8 text file within the project root. Use start_line for another line page or start_offset to continue an oversized line. Results include range and truncation metadata.",
+      { path: stringSchema(), start_line: numberSchema(1), start_offset: numberSchema(0) },
       ["path"],
     ),
     definition(
@@ -477,6 +520,10 @@ function stringSchema(values?: string[]): JsonValue {
   return { type: "string", ...(values ? { enum: values } : {}) };
 }
 
+function numberSchema(minimum: number): JsonValue {
+  return { type: "integer", minimum };
+}
+
 function parseArguments(call: ToolCall): Record<string, unknown> {
   let parsed: unknown;
   try {
@@ -501,6 +548,306 @@ function requiredString(value: unknown, field: string): string {
 
 function optionalString(value: unknown, field: string): string | undefined {
   return value === undefined ? undefined : requiredString(value, field);
+}
+
+function optionalInteger(value: unknown, field: string, minimum: number): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < minimum) {
+    throw new SwiftCoderAIError(
+      "arguments",
+      `${field} must be a safe integer greater than or equal to ${minimum}.`,
+    );
+  }
+  return value;
+}
+
+function readTextPage(
+  content: string,
+  startLine: number,
+  filePath: string,
+  startOffset?: number,
+): TextPage {
+  const totalLines = countLines(content);
+  let effectiveStartLine = startLine;
+  let startIndex: number;
+  let currentLine: TextLine | undefined;
+  if (startOffset === undefined) {
+    currentLine = lineAt(content, startLine);
+    if (!currentLine) {
+      throw new SwiftCoderAIError(
+        "arguments",
+        `start_line must be between 1 and ${totalLines} for this file.`,
+      );
+    }
+    startIndex = currentLine.start;
+  } else {
+    if (startOffset > content.length) {
+      throw new SwiftCoderAIError(
+        "arguments",
+        `start_offset must be between 0 and ${content.length} for this file.`,
+      );
+    }
+    if (
+      startOffset > 0 &&
+      startOffset < content.length &&
+      isHighSurrogate(content.charCodeAt(startOffset - 1)) &&
+      isLowSurrogate(content.charCodeAt(startOffset))
+    ) {
+      throw new SwiftCoderAIError(
+        "arguments",
+        "start_offset must point to a complete Unicode character.",
+      );
+    }
+    const locatedLine = lineContainingOffset(content, startOffset);
+    if (!locatedLine) {
+      throw new SwiftCoderAIError(
+        "arguments",
+        "start_offset must point within a readable text line.",
+      );
+    }
+    effectiveStartLine = locatedLine.line;
+    currentLine = locatedLine.boundary;
+    startIndex = startOffset;
+  }
+
+  if (!currentLine) {
+    throw new SwiftCoderAIError("arguments", "Could not locate the requested text page.");
+  }
+
+  let acceptedEndLine = effectiveStartLine - 1;
+  let acceptedEndIndex = startIndex;
+  for (let lineCount = 0; lineCount < MAXIMUM_READ_LINES && currentLine; lineCount += 1) {
+    const pageContent = content.slice(startIndex, currentLine.endWithSeparator);
+    const endLine = effectiveStartLine + lineCount;
+    const page = createTextPage(
+      pageContent,
+      effectiveStartLine,
+      endLine,
+      totalLines,
+      false,
+      startOffset,
+    );
+    if (fitsTextPage(filePath, page)) {
+      acceptedEndLine = endLine;
+      acceptedEndIndex = currentLine.endWithSeparator;
+      if (endLine >= totalLines) break;
+      currentLine = nextLine(content, currentLine.endWithSeparator);
+      continue;
+    }
+
+    if (lineCount === 0) {
+      const remainingLine = content.slice(startIndex, currentLine.end);
+      const truncatedContent = longestFittingTextPrefix(
+        remainingLine,
+        (prefix) =>
+          createTextPage(
+            prefix,
+            effectiveStartLine,
+            endLine,
+            totalLines,
+            true,
+            startOffset,
+            (startOffset ?? startIndex) + prefix.length,
+          ),
+        filePath,
+      );
+      if (truncatedContent.length === 0 && currentLine.end > startIndex) {
+        throw new SwiftCoderAIError(
+          "arguments",
+          "File evidence cannot make forward progress within the evidence budget.",
+        );
+      }
+      return createTextPage(
+        truncatedContent,
+        effectiveStartLine,
+        endLine,
+        totalLines,
+        true,
+        startOffset,
+        (startOffset ?? startIndex) + truncatedContent.length,
+      );
+    }
+    break;
+  }
+
+  const pageContent = content.slice(startIndex, acceptedEndIndex);
+  return createTextPage(
+    pageContent,
+    effectiveStartLine,
+    acceptedEndLine,
+    totalLines,
+    false,
+    startOffset,
+  );
+}
+
+interface TextLine {
+  start: number;
+  end: number;
+  endWithSeparator: number;
+}
+
+interface TextPage {
+  content: string;
+  start_line: number;
+  end_line: number;
+  total_lines: number;
+  truncated: boolean;
+  start_offset?: number;
+  next_start_line?: number;
+  next_start_offset?: number;
+  truncated_line?: boolean;
+}
+
+function countLines(content: string): number {
+  let lineCount = 1;
+  let lineBreakIndex = content.indexOf("\n");
+  while (lineBreakIndex >= 0) {
+    lineCount += 1;
+    lineBreakIndex = content.indexOf("\n", lineBreakIndex + 1);
+  }
+  return lineCount;
+}
+
+function lineAt(content: string, lineNumber: number): TextLine | undefined {
+  if (lineNumber < 1) return undefined;
+  let start = 0;
+  let currentLine = 1;
+  while (currentLine < lineNumber) {
+    const lineBreakIndex = content.indexOf("\n", start);
+    if (lineBreakIndex < 0) return undefined;
+    start = lineBreakIndex + 1;
+    currentLine += 1;
+  }
+  return nextLine(content, start);
+}
+
+function lineContainingOffset(
+  content: string,
+  offset: number,
+): { line: number; boundary: TextLine } | undefined {
+  let start = 0;
+  let line = 1;
+  while (true) {
+    const boundary = nextLine(content, start);
+    if (offset >= boundary.start && offset <= boundary.end) return { line, boundary };
+    if (boundary.endWithSeparator >= content.length) return undefined;
+    start = boundary.endWithSeparator;
+    line += 1;
+  }
+}
+
+function nextLine(content: string, start: number): TextLine {
+  const lineBreakIndex = content.indexOf("\n", start);
+  if (lineBreakIndex < 0) {
+    return { start, end: content.length, endWithSeparator: content.length };
+  }
+  const end =
+    lineBreakIndex > start && content.charCodeAt(lineBreakIndex - 1) === 13
+      ? lineBreakIndex - 1
+      : lineBreakIndex;
+  return { start, end, endWithSeparator: lineBreakIndex + 1 };
+}
+
+function createTextPage(
+  content: string,
+  startLine: number,
+  endLine: number,
+  totalLines: number,
+  truncatedLine = false,
+  startOffset?: number,
+  nextStartOffset?: number,
+): TextPage {
+  const nextStartLine =
+    truncatedLine || nextStartOffset !== undefined || endLine >= totalLines
+      ? undefined
+      : endLine + 1;
+  return {
+    content,
+    start_line: startLine,
+    end_line: endLine,
+    total_lines: totalLines,
+    truncated: truncatedLine || nextStartLine !== undefined || nextStartOffset !== undefined,
+    ...(startOffset === undefined ? {} : { start_offset: startOffset }),
+    ...(nextStartLine === undefined ? {} : { next_start_line: nextStartLine }),
+    ...(nextStartOffset === undefined ? {} : { next_start_offset: nextStartOffset }),
+    ...(truncatedLine ? { truncated_line: true } : {}),
+  };
+}
+
+function fitsTextPage(filePath: string, page: TextPage): boolean {
+  return (
+    Buffer.byteLength(
+      JSON.stringify({
+        path: filePath,
+        ...page,
+      }),
+      "utf8",
+    ) <= MAXIMUM_CONTEXT_BYTES
+  );
+}
+
+function longestFittingTextPrefix(
+  value: string,
+  createPage: (prefix: string) => TextPage,
+  filePath: string,
+): string {
+  if (!fitsTextPage(filePath, createPage(""))) {
+    throw new SwiftCoderAIError(
+      "arguments",
+      "File metadata is too large to fit within the evidence budget.",
+    );
+  }
+  const characters = Array.from(truncateUtf8(value, MAXIMUM_CONTEXT_BYTES));
+  let low = 0;
+  let high = characters.length;
+  while (low < high) {
+    const count = Math.ceil((low + high) / 2);
+    const prefix = characters.slice(0, count).join("");
+    if (fitsTextPage(filePath, createPage(prefix))) low = count;
+    else high = count - 1;
+  }
+  if (value.length > 0 && low === 0) {
+    throw new SwiftCoderAIError(
+      "arguments",
+      "File evidence cannot make forward progress within the evidence budget.",
+    );
+  }
+  return characters.slice(0, low).join("");
+}
+
+function isHighSurrogate(value: number): boolean {
+  return value >= 0xd800 && value <= 0xdbff;
+}
+
+function isLowSurrogate(value: number): boolean {
+  return value >= 0xdc00 && value <= 0xdfff;
+}
+
+function truncateUtf8(value: string, maximumBytes: number): string {
+  let bytes = 0;
+  let end = 0;
+  for (const character of value) {
+    const characterBytes = Buffer.byteLength(character, "utf8");
+    if (bytes + characterBytes > maximumBytes) break;
+    bytes += characterBytes;
+    end += character.length;
+  }
+  return value.slice(0, end);
+}
+
+function takeJsonArrayWithinBytes<T>(
+  items: readonly T[],
+  maximumBytes: number,
+  serializeResult: (items: readonly T[]) => string,
+): T[] {
+  const bounded: T[] = [];
+  for (const item of items) {
+    const candidate = [...bounded, item];
+    if (Buffer.byteLength(serializeResult(candidate), "utf8") > maximumBytes) break;
+    bounded.push(item);
+  }
+  return bounded;
 }
 
 function occurrences(content: string, expected: string): number {

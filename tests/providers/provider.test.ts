@@ -402,6 +402,65 @@ void test("restores Gemini tool-result continuation state after a failed submiss
   ]);
 });
 
+void test("starts Gemini execution on a detached interaction after declaration", async () => {
+  const requestBodies: string[] = [];
+  const provider = new ModelProvider(configuration("gemini"), (_input, init) => {
+    requestBodies.push(readRequestBody(init));
+    return Promise.resolve(
+      Response.json({
+        id: `interaction-${requestBodies.length}`,
+        steps:
+          requestBodies.length === 1
+            ? [{ type: "model_output", content: [{ type: "text", text: "Prior." }] }]
+            : [{ type: "model_output", content: [{ type: "text", text: "Done." }] }],
+      }),
+    );
+  });
+  const declarationResult = {
+    role: "tool" as const,
+    tool_call_id: "task-1",
+    content:
+      '{"status":"declared","taskId":"task-id","goal":"Current task.","completionCriteria":["The requested result is returned."],"plan":["Inspect the project.","Report the result."]}',
+  };
+
+  await provider.complete([{ role: "user", content: "Prior task." }], tools);
+  provider.acceptCompletion();
+  await provider.complete([{ role: "user", content: "Current task." }], tools);
+  provider.acceptCompletion();
+  provider.startIsolatedContinuation();
+  await provider.complete(
+    [
+      { role: "user", content: "Current task." },
+      {
+        role: "assistant",
+        content: null,
+        tool_calls: [
+          {
+            id: "task-1",
+            function: { name: "declare_task", arguments: '{"goal":"Current task."}' },
+          },
+        ],
+      },
+      declarationResult,
+    ],
+    tools,
+  );
+
+  const executionPayload = JSON.parse(requestBodies[2] ?? "") as {
+    previous_interaction_id?: string;
+    input: Array<{ type: string; content: string }>;
+  };
+  assert.equal(executionPayload.previous_interaction_id, undefined);
+  assert.deepEqual(executionPayload.input, [
+    { type: "user_input", content: "Current task." },
+    {
+      type: "user_input",
+      content:
+        'Validated task protocol result:\n{"status":"declared","taskId":"task-id","goal":"Current task.","completionCriteria":["The requested result is returned."],"plan":["Inspect the project.","Report the result."]}',
+    },
+  ]);
+});
+
 void test("includes a bounded redacted provider error detail for HTTP failures", async () => {
   const provider = new ModelProvider(configuration("openai"), () =>
     Promise.resolve(

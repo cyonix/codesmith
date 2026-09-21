@@ -91,10 +91,19 @@ function hasValidPathToolArguments(toolName: string, value: unknown): boolean {
 
   switch (toolName) {
     case "list_files":
-      return hasExactStringFields(value, [], ["path"]);
+      return hasExactStringFields(value, [], ["path"], [{ name: "offset", minimum: 0 }]);
     case "search_files":
       return hasExactStringFields(value, ["query"], ["path"]);
     case "read_file":
+      return hasExactStringFields(
+        value,
+        ["path"],
+        [],
+        [
+          { name: "start_line", minimum: 1 },
+          { name: "start_offset", minimum: 0 },
+        ],
+      );
     case "delete_file":
       return hasExactStringFields(value, ["path"]);
     case "create_file":
@@ -121,12 +130,25 @@ function hasExactStringFields(
   value: unknown,
   required: readonly string[],
   optional: readonly string[] = [],
+  optionalIntegers: readonly { name: string; minimum: number }[] = [],
 ): boolean {
   if (!isRecord(value)) return false;
-  const allowed = new Set([...required, ...optional]);
+  const allowed = new Set([
+    ...required,
+    ...optional,
+    ...optionalIntegers.map((field) => field.name),
+  ]);
   if (!Object.keys(value).every((field) => allowed.has(field))) return false;
   if (!required.every((field) => isNonEmptyString(value[field]))) return false;
-  return optional.every((field) => value[field] === undefined || isNonEmptyString(value[field]));
+  if (!optional.every((field) => value[field] === undefined || isNonEmptyString(value[field])))
+    return false;
+  return optionalIntegers.every(
+    ({ name, minimum }) =>
+      value[name] === undefined ||
+      (typeof value[name] === "number" &&
+        Number.isSafeInteger(value[name]) &&
+        value[name] >= minimum),
+  );
 }
 
 function isNonEmptyString(value: unknown): value is string {
