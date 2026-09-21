@@ -104,9 +104,7 @@ void test("auto-approval still requires explicit model-download approval", async
 
   const submission = session.submit("Inspect the project.");
 
-  while (approvals.length === 0) {
-    await new Promise<void>((resolve) => setImmediate(resolve));
-  }
+  await new Promise<void>((resolve) => setImmediate(resolve));
   assert.deepEqual(
     approvals.map((approval) => approval.kind),
     ["model_download"],

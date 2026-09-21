@@ -726,11 +726,21 @@ function sanitizeExecutionMessages(
 }
 
 function sanitizeExcludedText(value: string, excludedRequests: readonly string[]): string {
-  return excludedRequests.reduce(
-    (sanitized, excludedRequest) =>
-      sanitized.replaceAll(excludedRequest, "[excluded request omitted]"),
-    value,
-  );
+  const matches = excludedRequests
+    .filter((excludedRequest) => excludedRequest.length > 0)
+    .sort((left, right) => right.length - left.length);
+  let sanitized = "";
+  for (let index = 0; index < value.length;) {
+    const match = matches.find((excludedRequest) => value.startsWith(excludedRequest, index));
+    if (match) {
+      sanitized += "[excluded request omitted]";
+      index += match.length;
+    } else {
+      sanitized += value[index];
+      index += 1;
+    }
+  }
+  return sanitized;
 }
 
 function sessionStartContextContent(prompt: string): string {
