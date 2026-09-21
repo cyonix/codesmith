@@ -17,6 +17,7 @@ export class GeminiProvider extends ProviderClient {
   private previousInteractionHasToolCalls = false;
   private pendingInteractionId: string | undefined;
   private pendingInteractionHasToolCalls = false;
+  private isolatedContinuationPending = false;
   private continuationCheckpoint:
     | { previousInteractionId: string | undefined; previousInteractionHasToolCalls: boolean }
     | undefined;
@@ -47,7 +48,9 @@ export class GeminiProvider extends ProviderClient {
           ? { previous_interaction_id: this.previousInteractionId }
           : {}),
         ...(systemInstruction ? { system_instruction: systemInstruction } : {}),
-        input: geminiInteractionInput(messages, this.previousInteractionHasToolCalls),
+        input: this.isolatedContinuationPending
+          ? geminiIsolatedInteractionInput(messages)
+          : geminiInteractionInput(messages, this.previousInteractionHasToolCalls),
         tools: tools.map((tool) => ({
           type: "function",
           name: tool.function.name,
@@ -68,6 +71,15 @@ export class GeminiProvider extends ProviderClient {
     this.previousInteractionHasToolCalls = this.pendingInteractionHasToolCalls;
     this.pendingInteractionId = undefined;
     this.pendingInteractionHasToolCalls = false;
+    this.isolatedContinuationPending = false;
+  }
+
+  startIsolatedContinuation(): void {
+    this.previousInteractionId = undefined;
+    this.previousInteractionHasToolCalls = false;
+    this.pendingInteractionId = undefined;
+    this.pendingInteractionHasToolCalls = false;
+    this.isolatedContinuationPending = true;
   }
 
   beginContinuationTransaction(): void {
@@ -77,6 +89,7 @@ export class GeminiProvider extends ProviderClient {
     };
     this.pendingInteractionId = undefined;
     this.pendingInteractionHasToolCalls = false;
+    this.isolatedContinuationPending = false;
   }
 
   commitContinuationTransaction(): void {
@@ -92,6 +105,7 @@ export class GeminiProvider extends ProviderClient {
     this.continuationCheckpoint = undefined;
     this.pendingInteractionId = undefined;
     this.pendingInteractionHasToolCalls = false;
+    this.isolatedContinuationPending = false;
   }
 }
 
@@ -141,6 +155,27 @@ function geminiInteractionInput(
       call_id: message.tool_call_id,
       result: [{ type: "text", text: message.content ?? "" }],
     });
+  }
+  return input;
+}
+
+function geminiIsolatedInteractionInput(messages: ChatMessage[]): unknown[] {
+  const input: unknown[] = [];
+  for (const message of messages) {
+    if (message.role === "user") {
+      input.push({ type: "user_input", content: message.content ?? "" });
+    } else if (message.role === "tool") {
+      input.push({
+        type: "user_input",
+        content: `Validated task protocol result:\n${message.content ?? ""}`,
+      });
+    }
+  }
+  if (!input.length) {
+    throw new CodeSmithError(
+      "provider",
+      "A Gemini interaction requires new user input or function results.",
+    );
   }
   return input;
 }

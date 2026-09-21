@@ -324,10 +324,12 @@ CodeSmith follows these principles when it runs an agent loop.
       conversation continuity, but execution rounds receive only the current
       submission, its task contract and plan revisions, and fresh tool results.
       Workspace evidence is bounded: `read_file` returns at most 200 lines and
-      20 KB with range and continuation metadata, while directory listings and
-      searches report pagination or truncation. Treat partial, stale, missing,
-      or conflicting evidence as incomplete, state the uncertainty, and request
-      the exact missing input instead of guessing.
+      20 KB with range and continuation metadata, including an intra-line offset
+      for oversized lines. Provider continuation state is also detached before
+      execution so providers cannot replay prior submissions. Directory listings
+      and searches report pagination or truncation. Treat partial, stale,
+      missing, or conflicting evidence as incomplete, state the uncertainty, and
+      request the exact missing input instead of guessing.
 - [ ] **Task-scope discipline:** Focus on the selected project and
       software-engineering work. Politely redirect unrelated requests.
 - [ ] **Episodic tool-execution memory:**
@@ -367,7 +369,9 @@ does not ask when you use `--yes` or set `autoApprove: true`.
 Read-only workspace results are bounded before they reach the model. `read_file`
 supports an optional 1-based `start_line` and returns at most 200 lines and
 20 KB, with `start_line`, `end_line`, `total_lines`, `truncated`, and
-`next_start_line` metadata when more evidence is available. `list_files` supports
+`next_start_line` metadata when more evidence is available. Oversized lines also
+return `next_start_offset`; pass that 0-based character offset as `start_offset`
+to continue the same line. `list_files` supports
 an optional non-negative `offset`, returns at most 200 entries, and reports
 `total_files` and `next_offset`. `search_files` returns at most 50 matches and
 marks capped results with `truncated: true`. These limits are evidence limits;

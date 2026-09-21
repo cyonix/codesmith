@@ -49,4 +49,8 @@ export class ModelProvider implements ChatProvider {
   acceptCompletion(): void {
     this.implementation.acceptCompletion?.();
   }
+
+  startIsolatedContinuation(): void {
+    this.implementation.startIsolatedContinuation?.();
+  }
 }

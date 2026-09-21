@@ -107,7 +107,7 @@ void test("reads files in bounded line pages with continuation metadata", async 
 void test("marks an oversized line as incomplete without splitting UTF-8", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
   context.after(async () => rm(root, { recursive: true, force: true }));
-  await writeFile(path.join(root, "large-line.txt"), "😀".repeat(10_000));
+  await writeFile(path.join(root, "large-line.txt"), "😀".repeat(6_000));
   const tools = await ToolExecutor.create(root, true);
 
   const result = JSON.parse(
@@ -119,6 +119,19 @@ void test("marks an oversized line as incomplete without splitting UTF-8", async
   assert.equal(result.total_lines, 1);
   assert.ok(Buffer.byteLength(returned, "utf8") <= 20_000);
   assert.equal(returned.endsWith("\uFFFD"), false);
+
+  const continuation = JSON.parse(
+    await tools.execute(
+      call("read_file", {
+        path: "large-line.txt",
+        start_offset: result.next_start_offset,
+      }),
+    ),
+  ) as Record<string, unknown>;
+  assert.equal(continuation.start_line, 1);
+  assert.equal(continuation.start_offset, result.next_start_offset);
+  assert.equal(continuation.truncated, false);
+  assert.equal(returned + (continuation.content as string), "😀".repeat(6_000));
 });
 void test("preserves CRLF content returned for an exact multi-line patch", async (context) => {
   const root = await mkdtemp(path.join(tmpdir(), "swiftcoderai-"));
@@ -234,6 +247,10 @@ void test("rejects invalid grounded-context pagination arguments", async (contex
   assert.match(
     resultError(await tools.execute(call("read_file", { path: "file.txt", start_line: 0 }))),
     /start_line must be a safe integer greater than or equal to 1/,
+  );
+  assert.match(
+    resultError(await tools.execute(call("read_file", { path: "file.txt", start_offset: -1 }))),
+    /start_offset must be a safe integer greater than or equal to 0/,
   );
   assert.match(
     resultError(await tools.execute(call("list_files", { offset: -1 }))),

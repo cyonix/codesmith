@@ -95,7 +95,15 @@ function hasValidPathToolArguments(toolName: string, value: unknown): boolean {
     case "search_files":
       return hasExactStringFields(value, ["query"], ["path"]);
     case "read_file":
-      return hasExactStringFields(value, ["path"], [], [{ name: "start_line", minimum: 1 }]);
+      return hasExactStringFields(
+        value,
+        ["path"],
+        [],
+        [
+          { name: "start_line", minimum: 1 },
+          { name: "start_offset", minimum: 0 },
+        ],
+      );
     case "delete_file":
       return hasExactStringFields(value, ["path"]);
     case "create_file":

@@ -214,6 +214,7 @@ export class ToolExecutor {
   private async readFile(argumentsValue: Record<string, unknown>): Promise<string> {
     await this.sandbox.assertUnchanged();
     const startLine = optionalInteger(argumentsValue.start_line, "start_line", 1) ?? 1;
+    const startOffset = optionalInteger(argumentsValue.start_offset, "start_offset", 0);
     const filePath = this.permitted(
       await this.sandbox.resolve(requiredString(argumentsValue.path, "path")),
     );
@@ -223,7 +224,7 @@ export class ToolExecutor {
       throw new SwiftCoderAIError("arguments", "File is not valid UTF-8 text.");
     return JSON.stringify({
       path: this.sandbox.relative(filePath),
-      ...readTextPage(content, startLine, this.sandbox.relative(filePath)),
+      ...readTextPage(content, startLine, this.sandbox.relative(filePath), startOffset),
     });
   }
 
@@ -467,8 +468,8 @@ function toolDefinitions(profile: ProjectProfile): ToolDefinition[] {
     ),
     definition(
       "read_file",
-      "Read up to 200 lines and 20 KB from a UTF-8 text file within the project root. Use start_line to request another page. Results include range and truncation metadata.",
-      { path: stringSchema(), start_line: numberSchema(1) },
+      "Read up to 200 lines and 20 KB from a UTF-8 text file within the project root. Use start_line for another line page or start_offset to continue an oversized line. Results include range and truncation metadata.",
+      { path: stringSchema(), start_line: numberSchema(1), start_offset: numberSchema(0) },
       ["path"],
     ),
     definition(
@@ -564,59 +565,131 @@ function readTextPage(
   content: string,
   startLine: number,
   filePath: string,
-): {
-  content: string;
-  start_line: number;
-  end_line: number;
-  total_lines: number;
-  truncated: boolean;
-  next_start_line?: number;
-  truncated_line?: boolean;
-} {
+  startOffset?: number,
+): TextPage {
   const lines = splitLines(content);
   const totalLines = lines.length;
-  if (startLine > totalLines) {
+  if (startOffset === undefined && startLine > totalLines) {
     throw new SwiftCoderAIError(
       "arguments",
       `start_line must be between 1 and ${totalLines} for this file.`,
     );
   }
 
-  let acceptedEndLine = startLine - 1;
+  let effectiveStartLine = startLine;
+  let startIndex: number;
+  if (startOffset === undefined) {
+    startIndex = lines[startLine - 1].start;
+  } else {
+    if (startOffset > content.length) {
+      throw new SwiftCoderAIError(
+        "arguments",
+        `start_offset must be between 0 and ${content.length} for this file.`,
+      );
+    }
+    if (
+      startOffset > 0 &&
+      startOffset < content.length &&
+      isHighSurrogate(content.charCodeAt(startOffset - 1)) &&
+      isLowSurrogate(content.charCodeAt(startOffset))
+    ) {
+      throw new SwiftCoderAIError(
+        "arguments",
+        "start_offset must point to a complete Unicode character.",
+      );
+    }
+    const offsetLineIndex = lines.findIndex(
+      (line) => startOffset >= line.start && startOffset <= line.end,
+    );
+    if (offsetLineIndex < 0) {
+      throw new SwiftCoderAIError(
+        "arguments",
+        "start_offset must point within a readable text line.",
+      );
+    }
+    effectiveStartLine = offsetLineIndex + 1;
+    startIndex = startOffset;
+  }
+
+  let acceptedEndLine = effectiveStartLine - 1;
   for (
-    let index = startLine - 1;
-    index < totalLines && index < startLine - 1 + MAXIMUM_READ_LINES;
+    let index = effectiveStartLine - 1;
+    index < totalLines && index < effectiveStartLine - 1 + MAXIMUM_READ_LINES;
     index += 1
   ) {
     const line = lines[index];
     if (!line) continue;
-    const pageContent = content.slice(lines[startLine - 1].start, line.end);
+    const pageContent = content.slice(startIndex, line.end);
     const endLine = index + 1;
-    const page = createTextPage(pageContent, startLine, endLine, totalLines);
+    const page = createTextPage(
+      pageContent,
+      effectiveStartLine,
+      endLine,
+      totalLines,
+      false,
+      startOffset,
+    );
     if (fitsTextPage(filePath, page)) {
       acceptedEndLine = endLine;
       continue;
     }
 
-    if (index === startLine - 1) {
+    if (index === effectiveStartLine - 1) {
+      const remainingLine = content.slice(startIndex, line.end);
       const truncatedContent = longestFittingTextPrefix(
-        line.value,
-        (prefix) => createTextPage(prefix, startLine, endLine, totalLines, true),
+        remainingLine,
+        (prefix) =>
+          createTextPage(
+            prefix,
+            effectiveStartLine,
+            endLine,
+            totalLines,
+            true,
+            startOffset,
+            (startOffset ?? startIndex) + prefix.length,
+          ),
         filePath,
       );
-      return createTextPage(truncatedContent, startLine, endLine, totalLines, true);
+      return createTextPage(
+        truncatedContent,
+        effectiveStartLine,
+        endLine,
+        totalLines,
+        true,
+        startOffset,
+        (startOffset ?? startIndex) + truncatedContent.length,
+      );
     }
     break;
   }
 
-  const pageContent = content.slice(lines[startLine - 1].start, lines[acceptedEndLine - 1].end);
-  return createTextPage(pageContent, startLine, acceptedEndLine, totalLines);
+  const pageContent = content.slice(startIndex, lines[acceptedEndLine - 1].end);
+  return createTextPage(
+    pageContent,
+    effectiveStartLine,
+    acceptedEndLine,
+    totalLines,
+    false,
+    startOffset,
+  );
 }
 
 interface TextLine {
   value: string;
   start: number;
   end: number;
+}
+
+interface TextPage {
+  content: string;
+  start_line: number;
+  end_line: number;
+  total_lines: number;
+  truncated: boolean;
+  start_offset?: number;
+  next_start_line?: number;
+  next_start_offset?: number;
+  truncated_line?: boolean;
 }
 
 function splitLines(content: string): TextLine[] {
@@ -638,28 +711,27 @@ function createTextPage(
   endLine: number,
   totalLines: number,
   truncatedLine = false,
-): {
-  content: string;
-  start_line: number;
-  end_line: number;
-  total_lines: number;
-  truncated: boolean;
-  next_start_line?: number;
-  truncated_line?: boolean;
-} {
-  const nextStartLine = endLine < totalLines ? endLine + 1 : undefined;
+  startOffset?: number,
+  nextStartOffset?: number,
+): TextPage {
+  const nextStartLine =
+    truncatedLine || nextStartOffset !== undefined || endLine >= totalLines
+      ? undefined
+      : endLine + 1;
   return {
     content,
     start_line: startLine,
     end_line: endLine,
     total_lines: totalLines,
-    truncated: truncatedLine || nextStartLine !== undefined,
+    truncated: truncatedLine || nextStartLine !== undefined || nextStartOffset !== undefined,
+    ...(startOffset === undefined ? {} : { start_offset: startOffset }),
     ...(nextStartLine === undefined ? {} : { next_start_line: nextStartLine }),
+    ...(nextStartOffset === undefined ? {} : { next_start_offset: nextStartOffset }),
     ...(truncatedLine ? { truncated_line: true } : {}),
   };
 }
 
-function fitsTextPage(filePath: string, page: ReturnType<typeof createTextPage>): boolean {
+function fitsTextPage(filePath: string, page: TextPage): boolean {
   return (
     Buffer.byteLength(
       JSON.stringify({
@@ -673,7 +745,7 @@ function fitsTextPage(filePath: string, page: ReturnType<typeof createTextPage>)
 
 function longestFittingTextPrefix(
   value: string,
-  createPage: (prefix: string) => ReturnType<typeof createTextPage>,
+  createPage: (prefix: string) => TextPage,
   filePath: string,
 ): string {
   const characters = Array.from(truncateUtf8(value, MAXIMUM_CONTEXT_BYTES));
@@ -686,6 +758,14 @@ function longestFittingTextPrefix(
     else high = count - 1;
   }
   return characters.slice(0, low).join("");
+}
+
+function isHighSurrogate(value: number): boolean {
+  return value >= 0xd800 && value <= 0xdbff;
+}
+
+function isLowSurrogate(value: number): boolean {
+  return value >= 0xdc00 && value <= 0xdfff;
 }
 
 function truncateUtf8(value: string, maximumBytes: number): string {

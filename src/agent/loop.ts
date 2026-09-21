@@ -83,6 +83,7 @@ export class AgentLoop {
       : undefined;
     this.memory?.startSubmission();
     if (this.sessionStartPrompt === undefined) this.sessionStartPrompt = prompt;
+    this.provider.startIsolatedContinuation?.();
     this.provider.continuationTransaction?.commit();
     markReady();
 
@@ -343,7 +344,7 @@ export class AgentLoop {
             messages: [
               {
                 role: "assistant",
-                content: responseContent,
+                content: null,
                 tool_calls: declarationCalls,
               },
               declarationResult,
